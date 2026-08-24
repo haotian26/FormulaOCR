@@ -4,7 +4,7 @@ use std::process::{Child, ChildStdin, Command, Stdio};
 use std::collections::HashMap;
 use std::sync::{mpsc, Arc, Mutex};
 use std::thread;
-use tauri::menu::{MenuBuilder, MenuItemBuilder};
+use tauri::menu::{Menu, MenuBuilder, MenuItemBuilder};
 use tauri::tray::TrayIconBuilder;
 use tauri::Manager;
 use tauri::Emitter;
@@ -19,6 +19,28 @@ fn show_main_window<R: tauri::Runtime>(app: &tauri::AppHandle<R>) {
         let _ = window.unminimize();
         let _ = window.set_focus();
     }
+}
+
+fn tray_menu<R: tauri::Runtime>(app: &tauri::AppHandle<R>, language: &str) -> tauri::Result<Menu<R>> {
+    let english = language == "en";
+    let show = MenuItemBuilder::with_id("show", if english { "Show Main Window" } else { "显示主窗口" }).build(app)?;
+    let screenshot = MenuItemBuilder::with_id("screenshot", if english { "Screenshot OCR" } else { "截图 OCR" }).build(app)?;
+    let settings = MenuItemBuilder::with_id("settings", if english { "Settings…" } else { "设置…" }).build(app)?;
+    let quit = MenuItemBuilder::with_id("quit", if english { "Quit FormulaOCR" } else { "退出 FormulaOCR" }).build(app)?;
+    MenuBuilder::new(app)
+        .item(&show)
+        .item(&screenshot)
+        .item(&settings)
+        .separator()
+        .item(&quit)
+        .build()
+}
+
+#[tauri::command]
+fn set_menu_language<R: tauri::Runtime>(app: tauri::AppHandle<R>, language: String) -> Result<(), String> {
+    let menu = tray_menu(&app, &language).map_err(|error| error.to_string())?;
+    let tray = app.tray_by_id("main").ok_or("FormulaOCR tray icon is unavailable")?;
+    tray.set_menu(Some(menu)).map_err(|error| error.to_string())
 }
 
 fn stage_root() -> Result<std::path::PathBuf, String> {
@@ -467,14 +489,10 @@ pub fn run() {
         )
         .manage(AppState(Arc::new(Mutex::new(None))))
         .manage(HotkeyState(Mutex::new("ctrl+alt+cmd+o".to_string())))
-        .invoke_handler(tauri::generate_handler![sidecar_request, stage_image_bytes, native_copy_word, native_screenshot, set_global_hotkey, quit_application, set_activation_policy, resize_settings_window])
+        .invoke_handler(tauri::generate_handler![sidecar_request, stage_image_bytes, native_copy_word, native_screenshot, set_global_hotkey, set_menu_language, quit_application, set_activation_policy, resize_settings_window])
         .setup(|app| {
-            let show = MenuItemBuilder::with_id("show", "显示主窗口").build(app)?;
-            let screenshot = MenuItemBuilder::with_id("screenshot", "截图 OCR").build(app)?;
-            let settings = MenuItemBuilder::with_id("settings", "设置…").build(app)?;
-            let quit = MenuItemBuilder::with_id("quit", "退出 FormulaOCR").build(app)?;
-            let menu = MenuBuilder::new(app).item(&show).item(&screenshot).item(&settings).separator().item(&quit).build()?;
-            let mut tray_builder = TrayIconBuilder::new()
+            let menu = tray_menu(app.handle(), "zh-CN")?;
+            let mut tray_builder = TrayIconBuilder::with_id("main")
                 .menu(&menu)
                 .tooltip("FormulaOCR");
             // This is the exact AppKit SF Symbol used by the original

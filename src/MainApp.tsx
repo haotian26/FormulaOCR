@@ -30,6 +30,12 @@ import { getCurrentWindow } from "@tauri-apps/api/window";
 import { EditorState } from "@codemirror/state";
 import { EditorView } from "@codemirror/view";
 import { callSidecar } from "./sidecar";
+import {
+  localizeError,
+  normalizeLanguage,
+  translate,
+  type AppLanguage,
+} from "./i18n";
 
 type Source = "local" | "api";
 type RecognitionMode = "chemistry" | "math";
@@ -41,6 +47,7 @@ type Settings = {
   layout_restore_mode: string;
   layout_version?: number;
   default_recognition_mode: RecognitionMode;
+  language: AppLanguage;
 };
 type Profile = {
   id: string;
@@ -82,6 +89,7 @@ const defaults: Settings = {
   history_limit: 200,
   layout_restore_mode: "remember_window_history_closed",
   default_recognition_mode: "chemistry",
+  language: "zh-CN",
 };
 
 function pngBase64ToBlob(value: string): Blob {
@@ -92,7 +100,11 @@ function pngBase64ToBlob(value: string): Blob {
   return new Blob([bytes], { type: "image/png" });
 }
 
-function openSettings(page = "常规", onFallback?: () => void) {
+function openSettings(
+  page = "常规",
+  language: AppLanguage = "zh-CN",
+  onFallback?: () => void,
+) {
   void (async () => {
     try {
       const existing = await WebviewWindow.getByLabel("settings");
@@ -104,7 +116,7 @@ function openSettings(page = "常规", onFallback?: () => void) {
       }
       const child = new WebviewWindow("settings", {
         url: `index.html?settings=1&page=${encodeURIComponent(page)}`,
-        title: "FormulaOCR 设置",
+        title: translate(language, "FormulaOCR 设置"),
         width: 820,
         height: 500,
         minWidth: 760,
@@ -128,9 +140,11 @@ function openSettings(page = "常规", onFallback?: () => void) {
 function LatexEditor({
   value,
   onChange,
+  language,
 }: {
   value: string;
   onChange: (value: string) => void;
+  language: AppLanguage;
 }) {
   const host = useRef<HTMLDivElement>(null);
   const view = useRef<EditorView | null>(null);
@@ -165,10 +179,22 @@ function LatexEditor({
     });
     internal.current = false;
   }, [value]);
-  return <div ref={host} className="latex-editor" aria-label="LaTeX 编辑器" />;
+  return (
+    <div
+      ref={host}
+      className="latex-editor"
+      aria-label={translate(language, "LaTeX 编辑器")}
+    />
+  );
 }
 
-function MathPreview({ latex }: { latex: string }) {
+function MathPreview({
+  latex,
+  language,
+}: {
+  latex: string;
+  language: AppLanguage;
+}) {
   const renderId = useRef(0);
   const [mathml, setMathml] = useState("");
   const [error, setError] = useState("");
@@ -211,10 +237,20 @@ function MathPreview({ latex }: { latex: string }) {
           dangerouslySetInnerHTML={{ __html: mathml }}
         />
       )}
-      {!latex && <span className="muted preview-message">公式将在这里预览</span>}
-      {loading && <span className="muted preview-message">正在生成预览…</span>}
+      {!latex && (
+        <span className="muted preview-message">
+          {translate(language, "公式将在这里预览")}
+        </span>
+      )}
+      {loading && (
+        <span className="muted preview-message">
+          {translate(language, "正在生成预览…")}
+        </span>
+      )}
       {error && (
-        <span className="preview-error preview-message">无法渲染公式：{error}</span>
+        <span className="preview-error preview-message">
+          {translate(language, "无法渲染公式：{error}", { error })}
+        </span>
       )}
     </div>
   );
@@ -225,11 +261,13 @@ function HotkeyRecorder({
   onChange,
   error,
   setError,
+  language,
 }: {
   value: string;
   onChange: (value: string) => void;
   error: string;
   setError: (value: string) => void;
+  language: AppLanguage;
 }) {
   const [recording, setRecording] = useState(false);
   const modifierKeys = new Set(["Meta", "Control", "Alt", "Shift"]);
@@ -251,7 +289,7 @@ function HotkeyRecorder({
       if (event.shiftKey) parts.push("shift");
       if (event.metaKey) parts.push("cmd");
       if (!parts.length) {
-        setError("请使用至少一个修饰键和一个主键");
+        setError(translate(language, "请使用至少一个修饰键和一个主键"));
         return;
       }
       const key =
@@ -259,7 +297,7 @@ function HotkeyRecorder({
           ? event.key.toLowerCase()
           : event.key.toLowerCase().replace("arrow", "");
       if (!key || key === "unidentified") {
-        setError("不支持的主键");
+        setError(translate(language, "不支持的主键"));
         return;
       }
       parts.push(key);
@@ -269,7 +307,7 @@ function HotkeyRecorder({
     };
     window.addEventListener("keydown", onKeyDown, true);
     return () => window.removeEventListener("keydown", onKeyDown, true);
-  }, [recording, onChange, setError]);
+  }, [recording, onChange, setError, language]);
   const labels: Record<string, string> = {
     cmd: "⌘",
     ctrl: "⌃",
@@ -281,7 +319,7 @@ function HotkeyRecorder({
         .split("+")
         .map((part) => labels[part] || part.toUpperCase())
         .join(" ")
-    : "未设置";
+    : translate(language, "未设置");
   return (
     <div className="hotkey-recorder">
       <button
@@ -291,9 +329,11 @@ function HotkeyRecorder({
           setError("");
         }}
       >
-        {recording ? "请按组合键…" : display}
+        {recording ? translate(language, "请按组合键…") : display}
       </button>
-      <span className="field-help">点击后按组合键，Esc 清空</span>
+      <span className="field-help">
+        {translate(language, "点击后按组合键，Esc 清空")}
+      </span>
       {error && <span className="field-error">{error}</span>}
     </div>
   );
@@ -302,10 +342,12 @@ function HotkeyRecorder({
 function SettingsCenter({
   inline = false,
   initialPage,
+  initialLanguage = "zh-CN",
   onClose,
 }: {
   inline?: boolean;
   initialPage?: string;
+  initialLanguage?: AppLanguage;
   onClose?: () => void;
 }) {
   const params = new URLSearchParams(window.location.search);
@@ -317,8 +359,9 @@ function SettingsCenter({
     "历史记录",
   ];
   const [page, setPage] = useState(initialPage || params.get("page") || "常规");
-  const [settings, setSettings] = useState<Settings>(defaults);
-  const [savedSettings, setSavedSettings] = useState<Settings>(defaults);
+  const initialSettings = { ...defaults, language: initialLanguage };
+  const [settings, setSettings] = useState<Settings>(initialSettings);
+  const [savedSettings, setSavedSettings] = useState<Settings>(initialSettings);
   const [profiles, setProfiles] = useState<Profile[]>([]);
   const [savedProfiles, setSavedProfiles] = useState<Profile[]>([]);
   const [apiEnabled, setApiEnabled] = useState(false);
@@ -333,6 +376,9 @@ function SettingsCenter({
   const [hotkeyError, setHotkeyError] = useState("");
   const [confirmDiscard, setConfirmDiscard] = useState(false);
   const allowCloseRef = useRef(false);
+  const language = normalizeLanguage(settings.language);
+  const t = (text: string, values?: Record<string, string | number>) =>
+    translate(language, text, values);
   const selected = profiles.find((profile) => profile.id === selectedId);
   const settingsDirty =
     JSON.stringify(settings) !== JSON.stringify(savedSettings);
@@ -341,7 +387,12 @@ function SettingsCenter({
     activeId !== savedActiveId ||
     JSON.stringify(profiles) !== JSON.stringify(savedProfiles);
   const pageKeys: Record<string, (keyof Settings)[]> = {
-    常规: ["auto_copy", "hide_dock_on_close", "default_recognition_mode"],
+    常规: [
+      "auto_copy",
+      "hide_dock_on_close",
+      "default_recognition_mode",
+      "language",
+    ],
     界面与布局: ["layout_restore_mode"],
     快捷键: ["hotkey"],
     历史记录: ["history_limit"],
@@ -352,13 +403,18 @@ function SettingsCenter({
   useEffect(() => {
     void callSidecar<Settings>("settings.get")
       .then((value) => {
-        setSettings({ ...defaults, ...value });
-        setSavedSettings({ ...defaults, ...value });
+        const normalized = {
+          ...defaults,
+          ...value,
+          language: normalizeLanguage(value.language),
+        };
+        setSettings(normalized);
+        setSavedSettings(normalized);
         void invoke("set_global_hotkey", {
           shortcut: value.hotkey || "",
         }).catch(() => undefined);
       })
-      .catch((caught) => setError(String(caught)));
+      .catch((caught) => setError(localizeError(language, caught)));
     void callSidecar<{
       api_enabled: boolean;
       active_profile_id: string;
@@ -373,8 +429,15 @@ function SettingsCenter({
         setSavedProfiles(value.profiles.map((profile) => ({ ...profile })));
         setSelectedId(value.active_profile_id || value.profiles[0]?.id || "");
       })
-      .catch((caught) => setError(String(caught)));
+      .catch((caught) => setError(localizeError(language, caught)));
   }, []);
+  useEffect(() => {
+    document.documentElement.lang = language;
+    if (!inline)
+      void getCurrentWindow().setTitle(t("FormulaOCR 设置")).catch(() =>
+        undefined,
+      );
+  }, [inline, language]);
   useEffect(() => {
     let stop: (() => void) | undefined;
     void listen<string>("formulaocr://settings-page", (event) =>
@@ -468,7 +531,7 @@ function SettingsCenter({
     // explicitly confirmed discarding the draft.
     void getCurrentWindow().destroy();
   };
-  const saved = (message = "✓ 已保存") => {
+  const saved = (message = t("已保存")) => {
     void emit("formulaocr://settings-updated");
     setFeedback(message);
     window.setTimeout(() => setFeedback(""), 1500);
@@ -495,9 +558,11 @@ function SettingsCenter({
         await callSidecar("history.setLimit", {
           limit: settings.history_limit,
         });
+      if (page === "常规")
+        await invoke("set_menu_language", { language: value.language });
       saved();
     } catch (caught) {
-      setError(String(caught));
+      setError(localizeError(language, caught));
     }
   };
   const saveProfiles = async () => {
@@ -520,7 +585,7 @@ function SettingsCenter({
       setSelectedId(value.active_profile_id || value.profiles[0]?.id || "");
       saved();
     } catch (caught) {
-      setError(String(caught));
+      setError(localizeError(language, caught));
     }
   };
   const patchProfile = (patch: Partial<Profile>) =>
@@ -539,9 +604,14 @@ function SettingsCenter({
         { profile_id: selected.id, profile: selected },
       );
       setModels(result.models);
-      saved(result.message || `已获取 ${result.models.length} 个模型`);
+      saved(
+        language === "en"
+          ? t("已获取 {count} 个模型", { count: result.models.length })
+          : result.message ||
+            t("已获取 {count} 个模型", { count: result.models.length }),
+      );
     } catch (caught) {
-      setError(String(caught));
+      setError(localizeError(language, caught));
     } finally {
       setBusy(false);
     }
@@ -556,21 +626,21 @@ function SettingsCenter({
         { profile_id: selected.id, profile: selected },
       );
       if (result.models) setModels(result.models);
-      saved(result.message);
+      saved(language === "en" ? t("配置测试成功") : result.message);
     } catch (caught) {
-      setError(String(caught));
+      setError(localizeError(language, caught));
     } finally {
       setBusy(false);
     }
   };
   const resetLayout = () => {
     localStorage.removeItem("formulaocr.layout.v2");
-    saved("布局已重置");
+    saved(t("布局已重置"));
   };
   const addProfile = () => {
     const profile: Profile = {
       id: crypto.randomUUID().replaceAll("-", ""),
-      name: "新配置",
+      name: t("新配置"),
       provider_type: "openai_compatible",
       base_url: "",
       model: "",
@@ -585,7 +655,7 @@ function SettingsCenter({
     <main
       className={inline ? "settings-app inline" : "settings-app standalone"}
     >
-      <nav className="settings-tabs" aria-label="设置分类">
+      <nav className="settings-tabs" aria-label={t("设置分类")}>
         {pages.map((item) => (
           <button
             key={item}
@@ -594,17 +664,17 @@ function SettingsCenter({
             }
             onClick={() => setPage(item)}
           >
-            {item}
+            {t(item)}
           </button>
         ))}
       </nav>
       <section className="settings-page">
         <div className="page-heading">
-          <h2>{page}</h2>
+          <h2>{t(page)}</h2>
           <p>
             {page === "自定义模型与 API"
-              ? "管理仅由你主动触发的远程重识别配置。"
-              : "FormulaOCR 的本机行为与显示选项。"}
+              ? t("管理仅由你主动触发的远程重识别配置。")
+              : t("FormulaOCR 的本机行为与显示选项。")}
           </p>
         </div>
         <div className="settings-page-content">
@@ -615,19 +685,34 @@ function SettingsCenter({
                 onChange={(value) =>
                   setSettings({ ...settings, auto_copy: value })
                 }
-                title="识别完成后自动复制 Word 格式"
-                description="本地或 API 识别完成后自动写入剪贴板。"
+                title={t("识别完成后自动复制 Word 格式")}
+                description={t("本地或 API 识别完成后自动写入剪贴板。")}
               />
               <Toggle
                 checked={settings.hide_dock_on_close}
                 onChange={(value) =>
                   setSettings({ ...settings, hide_dock_on_close: value })
                 }
-                title="关闭窗口时隐藏 Dock 图标"
-                description="菜单栏继续运行，可从菜单栏重新打开主窗口。"
+                title={t("关闭窗口时隐藏 Dock 图标")}
+                description={t("菜单栏继续运行，可从菜单栏重新打开主窗口。")}
               />
               <label className="setting-field">
-                <span>默认识别模式</span>
+                <span>{t("界面语言")}</span>
+                <select
+                  value={language}
+                  onChange={(event) =>
+                    setSettings({
+                      ...settings,
+                      language: normalizeLanguage(event.target.value),
+                    })
+                  }
+                >
+                  <option value="zh-CN">{t("简体中文")}</option>
+                  <option value="en">English</option>
+                </select>
+              </label>
+              <label className="setting-field">
+                <span>{t("默认识别模式")}</span>
                 <select
                   value={settings.default_recognition_mode}
                   onChange={(event) =>
@@ -638,8 +723,8 @@ function SettingsCenter({
                     })
                   }
                 >
-                  <option value="chemistry">化学</option>
-                  <option value="math">数学</option>
+                  <option value="chemistry">{t("化学")}</option>
+                  <option value="math">{t("数学")}</option>
                 </select>
               </label>
             </div>
@@ -647,7 +732,7 @@ function SettingsCenter({
           {page === "界面与布局" && (
             <div className="settings-card">
               <p className="field-help">
-                窗口尺寸通过拖动调整；这里控制下次启动如何恢复窗口和分隔比例。
+                {t("窗口尺寸通过拖动调整；这里控制下次启动如何恢复窗口和分隔比例。")}
               </p>
               {[
                 ["remember_window_history_closed", "记住尺寸，历史关闭"],
@@ -663,19 +748,19 @@ function SettingsCenter({
                       setSettings({ ...settings, layout_restore_mode: value })
                     }
                   />
-                  <span>{label}</span>
+                  <span>{t(label)}</span>
                 </label>
               ))}
               <button className="secondary-button" onClick={resetLayout}>
                 <SlidersHorizontal size={17} />
-                立即重置布局
+                {t("立即重置布局")}
               </button>
             </div>
           )}
           {page === "快捷键" && (
             <div className="settings-card">
               <label className="setting-field">
-                <span>截图快捷键</span>
+                <span>{t("截图快捷键")}</span>
                 <HotkeyRecorder
                   value={settings.hotkey}
                   onChange={(value) =>
@@ -683,6 +768,7 @@ function SettingsCenter({
                   }
                   error={hotkeyError}
                   setError={setHotkeyError}
+                  language={language}
                 />
               </label>
             </div>
@@ -690,7 +776,7 @@ function SettingsCenter({
           {page === "历史记录" && (
             <div className="settings-card">
               <label className="setting-field">
-                <span>最多保存记录</span>
+                <span>{t("最多保存记录")}</span>
                 <input
                   type="number"
                   min={20}
@@ -708,7 +794,7 @@ function SettingsCenter({
                 />
               </label>
               <p className="field-help">
-                范围为 20–2000 条，降低上限后会删除最旧记录。
+                {t("范围为 20–2000 条，降低上限后会删除最旧记录。")}
               </p>
             </div>
           )}
@@ -738,6 +824,7 @@ function SettingsCenter({
               }}
               setActiveId={setActiveId}
               activeId={activeId}
+              language={language}
             />
           )}
         </div>
@@ -763,7 +850,7 @@ function SettingsCenter({
                 : saveSettings())
             }
           >
-            保存
+            {t("保存")}
           </button>
         </footer>
       </section>
@@ -775,22 +862,22 @@ function SettingsCenter({
             aria-labelledby="discard-title"
             aria-describedby="discard-copy"
           >
-            <h2 id="discard-title">放弃未保存的更改？</h2>
+            <h2 id="discard-title">{t("放弃未保存的更改？")}</h2>
             <p id="discard-copy">
-              设置中还有未保存的修改，关闭后这些修改将丢失。
+              {t("设置中还有未保存的修改，关闭后这些修改将丢失。")}
             </p>
             <div className="settings-confirm-actions">
               <button
                 className="secondary-button"
                 onClick={() => setConfirmDiscard(false)}
               >
-                取消
+                {t("取消")}
               </button>
               <button
                 className="toolbar-button primary"
                 onClick={discardAndClose}
               >
-                放弃更改
+                {t("放弃更改")}
               </button>
             </div>
           </div>
@@ -842,6 +929,7 @@ function APISettings({
   removeProfile,
   activeId,
   setActiveId,
+  language,
 }: {
   profiles: Profile[];
   selected?: Profile;
@@ -858,21 +946,24 @@ function APISettings({
   removeProfile: () => void;
   activeId: string;
   setActiveId: (id: string) => void;
+  language: AppLanguage;
 }) {
+  const t = (text: string, values?: Record<string, string | number>) =>
+    translate(language, text, values);
   return (
     <div className="api-settings-shell">
       <div className="api-master-card">
         <Toggle
           checked={apiEnabled}
           onChange={setApiEnabled}
-          title="启用 API 重识别"
-          description="只有主动点击主窗口的 API 重识别按钮时才会上传当前图片。"
+          title={t("启用 API 重识别")}
+          description={t("只有主动点击主窗口的 API 重识别按钮时才会上传当前图片。")}
         />
       </div>
       <div className="api-workspace">
         <aside className="profile-list">
           <div className="profile-list-heading">
-            <strong>配置</strong>
+            <strong>{t("配置")}</strong>
             <span>{profiles.length}</span>
           </div>
           <div className="profile-list-scroll">
@@ -886,18 +977,18 @@ function APISettings({
                 key={profile.id}
                 onClick={() => setSelectedId(profile.id)}
               >
-                <span>{profile.name || "未命名配置"}</span>
+                <span>{profile.name || t("未命名配置")}</span>
                 <small>
                   {profile.provider_type === "mathpix"
                     ? "Mathpix"
                     : "OpenAI-compatible"}{" "}
-                  · {profile.enabled ? "启用" : "停用"}
+                  · {profile.enabled ? t("启用") : t("停用")}
                 </small>
               </button>
             ))}
           </div>
           <button className="secondary-button add-profile" onClick={addProfile}>
-            ＋ 新增配置
+            {t("＋ 新增配置")}
           </button>
         </aside>
         <div className="profile-form">
@@ -905,7 +996,7 @@ function APISettings({
             <>
               <div className="profile-form-heading">
                 <div>
-                  <strong>{selected.name || "未命名配置"}</strong>
+                  <strong>{selected.name || t("未命名配置")}</strong>
                   <small>
                     {selected.provider_type === "mathpix"
                       ? "Mathpix"
@@ -920,14 +1011,14 @@ function APISettings({
                       patchProfile({ enabled: event.target.checked })
                     }
                   />
-                  <span>启用此配置</span>
+                  <span>{t("启用此配置")}</span>
                 </label>
               </div>
               <section className="form-section">
-                <h3>连接</h3>
+                <h3>{t("连接")}</h3>
                 <div className="profile-form-grid">
                   <label className="setting-field">
-                    <span>配置名称</span>
+                    <span>{t("配置名称")}</span>
                     <input
                       value={selected.name}
                       onChange={(event) =>
@@ -936,7 +1027,7 @@ function APISettings({
                     />
                   </label>
                   <label className="setting-field">
-                    <span>服务类型</span>
+                    <span>{t("服务类型")}</span>
                     <select
                       value={selected.provider_type}
                       onChange={(event) =>
@@ -962,10 +1053,10 @@ function APISettings({
               </section>
               {selected.provider_type === "openai_compatible" ? (
                 <section className="form-section">
-                  <h3>模型与凭据</h3>
+                  <h3>{t("模型与凭据")}</h3>
                   <div className="profile-form-grid">
                     <label className="setting-field full-row">
-                      <span>模型 ID</span>
+                      <span>{t("模型 ID")}</span>
                       <div className="model-row">
                         <input
                           list="formulaocr-models"
@@ -984,18 +1075,18 @@ function APISettings({
                           disabled={busy}
                           onClick={() => void fetchModels()}
                         >
-                          {busy ? "获取中…" : "获取模型"}
+                          {busy ? t("获取中…") : t("获取模型")}
                         </button>
                       </div>
                     </label>
                     <label className="setting-field full-row">
                       <span>
                         API Key{" "}
-                        <small>留空将保留 Keychain 中已保存的密钥</small>
+                        <small>{t("留空将保留 Keychain 中已保存的密钥")}</small>
                       </span>
                       <input
                         type="password"
-                        placeholder="Keychain 中已保存"
+                        placeholder={t("Keychain 中已保存")}
                         value={selected.api_key || ""}
                         onChange={(event) =>
                           patchProfile({ api_key: event.target.value })
@@ -1004,21 +1095,21 @@ function APISettings({
                     </label>
                     <label className="setting-field full-row">
                       <span>
-                        高级提示词 <small>留空使用内置公式转录提示</small>
+                        {t("高级提示词")} <small>{t("留空使用内置公式转录提示")}</small>
                       </span>
                       <textarea
                         value={selected.prompt_override || ""}
                         onChange={(event) =>
                           patchProfile({ prompt_override: event.target.value })
                         }
-                        placeholder="使用内置公式转录提示"
+                        placeholder={t("使用内置公式转录提示")}
                       />
                     </label>
                   </div>
                 </section>
               ) : (
                 <section className="form-section">
-                  <h3>Mathpix 凭据</h3>
+                  <h3>{t("Mathpix 凭据")}</h3>
                   <div className="profile-form-grid">
                     <label className="setting-field">
                       <span>App ID</span>
@@ -1031,11 +1122,11 @@ function APISettings({
                     </label>
                     <label className="setting-field">
                       <span>
-                        App Key <small>留空保留已保存密钥</small>
+                        App Key <small>{t("留空保留已保存密钥")}</small>
                       </span>
                       <input
                         type="password"
-                        placeholder="Keychain 中已保存"
+                        placeholder={t("Keychain 中已保存")}
                         value={selected.app_key || ""}
                         onChange={(event) =>
                           patchProfile({ app_key: event.target.value })
@@ -1048,7 +1139,7 @@ function APISettings({
               <section className="form-section compact-section">
                 <div className="timeout-row">
                   <label className="inline-field">
-                    <span>请求超时</span>
+                    <span>{t("请求超时")}</span>
                     <input
                       type="number"
                       min={5}
@@ -1063,15 +1154,15 @@ function APISettings({
                         })
                       }
                     />
-                    <span>秒</span>
+                    <span>{t("秒")}</span>
                   </label>
-                  <span className="field-help">范围 5–120 秒</span>
+                  <span className="field-help">{t("范围 5–120 秒")}</span>
                 </div>
               </section>
               <div className="profile-actions">
                 <button className="text-danger" onClick={removeProfile}>
                   <Trash2 size={16} />
-                  删除配置
+                  {t("删除配置")}
                 </button>
                 <span className="toolbar-spacer" />
                 <button
@@ -1080,19 +1171,19 @@ function APISettings({
                   disabled={busy}
                 >
                   <RefreshCw size={16} />
-                  {busy ? "测试中…" : "测试配置"}
+                  {busy ? t("测试中…") : t("测试配置")}
                 </button>
                 <button
                   className="secondary-button"
                   onClick={() => setActiveId(selected.id)}
                   disabled={activeId === selected.id}
                 >
-                  {activeId === selected.id ? "当前配置" : "设为当前"}
+                  {activeId === selected.id ? t("当前配置") : t("设为当前")}
                 </button>
               </div>
             </>
           ) : (
-            <div className="empty-state">请选择或新增一个 API 配置</div>
+            <div className="empty-state">{t("请选择或新增一个 API 配置")}</div>
           )}
         </div>
       </div>
@@ -1104,6 +1195,12 @@ export function MainApp() {
   const [drawer, setDrawer] = useState(false);
   const [settingsFallback, setSettingsFallback] = useState(false);
   const [settings, setSettings] = useState<Settings>(defaults);
+  const language = normalizeLanguage(settings.language);
+  const t = useCallback(
+    (text: string, values?: Record<string, string | number>) =>
+      translate(language, text, values),
+    [language],
+  );
   const [apiEnabled, setApiEnabled] = useState(false);
   const [profiles, setProfiles] = useState<Profile[]>([]);
   const [activeId, setActiveId] = useState("");
@@ -1145,6 +1242,7 @@ export function MainApp() {
   const imageUrlRef = useRef<string | null>(null);
   const imageIdRef = useRef<string | null>(null);
   const requestId = useRef(0);
+  const languageRef = useRef<AppLanguage>(language);
   const draftTimer = useRef<number | null>(null);
   const latexRef = useRef("");
   const editGroup = useRef<{ source: Source; lastAt: number }>({
@@ -1165,9 +1263,17 @@ export function MainApp() {
   const reloadSettings = useCallback(() => {
     void callSidecar<Settings>("settings.get")
       .then((value) => {
-        setSettings({ ...defaults, ...value });
+        const normalized = {
+          ...defaults,
+          ...value,
+          language: normalizeLanguage(value.language),
+        };
+        setSettings(normalized);
         void invoke("set_global_hotkey", {
           shortcut: value.hotkey || "",
+        }).catch(() => undefined);
+        void invoke("set_menu_language", {
+          language: normalized.language,
         }).catch(() => undefined);
       })
       .catch(() => undefined);
@@ -1187,31 +1293,34 @@ export function MainApp() {
     reloadSettings();
   }, [reloadSettings, reload]);
   useEffect(() => {
+    document.documentElement.lang = language;
+    document.title = "FormulaOCR";
+    languageRef.current = language;
+    setStatus(translate(language, "离线识别"));
+  }, [language]);
+  useEffect(() => {
     let active = true;
     void callSidecar<{ loaded: boolean; elapsed_ms: number }>("ocr.preload")
       .then((result) => {
         if (!active) return;
-        setStatus((current) =>
-          current === "正在后台准备离线模型…"
-            ? `离线模型已就绪 · ${Math.round(result.elapsed_ms)} ms`
-            : current,
-        );
+        setStatus(translate(languageRef.current, "离线模型已就绪 · {ms} ms", {
+          ms: Math.round(result.elapsed_ms),
+        }));
       })
       .catch((error) => {
         if (!active) return;
-        setStatus((current) =>
-          current === "正在后台准备离线模型…"
-            ? `离线模型加载失败：${error instanceof Error ? error.message : String(error)}`
-            : current,
-        );
+        setStatus(translate(languageRef.current, "离线模型加载失败：{error}", {
+          error: localizeError(languageRef.current, error),
+        }));
       });
     return () => {
       active = false;
     };
   }, []);
   const showSettings = useCallback(
-    (page = "常规") => openSettings(page, () => setSettingsFallback(true)),
-    [],
+    (page = "常规") =>
+      openSettings(page, language, () => setSettingsFallback(true)),
+    [language],
   );
   useEffect(() => {
     let stop: (() => void) | undefined;
@@ -1300,7 +1409,7 @@ export function MainApp() {
     setStacks({ local: { undo: [], redo: [] }, api: { undo: [], redo: [] } });
     latexRef.current = "";
     resetEditGroup("local");
-    setStatus("图片已载入，正在识别…");
+    setStatus(t("图片已载入，正在识别…"));
     if (previousId)
       void callSidecar("image.release", { image_id: previousId }).catch(
         () => undefined,
@@ -1340,7 +1449,7 @@ export function MainApp() {
     async (blob: Blob) => {
       const token = ++requestId.current;
       setBusy(true);
-      setStatus("正在载入图片…");
+      setStatus(t("正在载入图片…"));
       try {
         const id = await openImage(blob, token);
         if (!id) return;
@@ -1368,20 +1477,20 @@ export function MainApp() {
         });
         latexRef.current = value;
         resetEditGroup("local");
-        setStatus(
-          `识别完成${result.elapsed_ms ? ` · ${Math.round(result.elapsed_ms)} ms` : ""}`,
-        );
+        setStatus(t("识别完成{time}", {
+          time: result.elapsed_ms ? ` · ${Math.round(result.elapsed_ms)} ms` : "",
+        }));
         if (settings.auto_copy && value) await copyWord(value);
       } catch (error) {
         if (token === requestId.current)
-          setStatus(
-            `识别失败：${error instanceof Error ? error.message : String(error)}`,
-          );
+          setStatus(t("识别失败：{error}", {
+            error: localizeError(language, error),
+          }));
       } finally {
         if (token === requestId.current) setBusy(false);
       }
     },
-    [settings.auto_copy, mode],
+    [settings.auto_copy, mode, t],
   );
   const recognizeStaged = useCallback(
     async (blob: Blob, stagedPath: string) => {
@@ -1414,20 +1523,20 @@ export function MainApp() {
         });
         latexRef.current = value;
         resetEditGroup("local");
-        setStatus(
-          `识别完成${result.elapsed_ms ? ` · ${Math.round(result.elapsed_ms)} ms` : ""}`,
-        );
+        setStatus(t("识别完成{time}", {
+          time: result.elapsed_ms ? ` · ${Math.round(result.elapsed_ms)} ms` : "",
+        }));
         if (settings.auto_copy && value) await copyWord(value);
       } catch (error) {
         if (token === requestId.current)
-          setStatus(
-            `识别失败：${error instanceof Error ? error.message : String(error)}`,
-          );
+          setStatus(t("识别失败：{error}", {
+            error: localizeError(language, error),
+          }));
       } finally {
         if (token === requestId.current) setBusy(false);
       }
     },
-    [settings.auto_copy, mode],
+    [settings.auto_copy, mode, t],
   );
   useEffect(() => {
     const paste = (event: ClipboardEvent) => {
@@ -1482,7 +1591,7 @@ export function MainApp() {
     scheduleDraftSave(value);
   };
   const copyWord = async (value = latex) => {
-    if (!value.trim()) return setStatus("没有可复制的 LaTeX");
+    if (!value.trim()) return setStatus(t("没有可复制的 LaTeX"));
     try {
       const mathml = (
         await callSidecar<{ mathml: string }>("conversion.toMathML", {
@@ -1490,33 +1599,33 @@ export function MainApp() {
         })
       ).mathml;
       await invoke("native_copy_word", { latex: value, mathml });
-      setStatus("已复制 Word 格式");
+      setStatus(t("已复制 Word 格式"));
     } catch (error) {
-      setStatus(
-        `复制 Word 失败：${error instanceof Error ? error.message : String(error)}`,
-      );
+      setStatus(t("复制 Word 失败：{error}", {
+        error: localizeError(language, error),
+      }));
     }
   };
   const screenshot = useCallback(async () => {
     if (busy || captureInProgress.current) return;
     captureInProgress.current = true;
-    setStatus("请拖动选择截图区域，Esc 取消");
+    setStatus(t("请拖动选择截图区域，Esc 取消"));
     try {
       const path = await invoke<string>("native_screenshot");
       const response = await fetch(convertFileSrc(path));
-      if (!response.ok) throw new Error("无法读取截图结果");
+      if (!response.ok) throw new Error(t("无法读取截图结果"));
       const blob = await response.blob();
       // recognize() publishes the Blob URL first; the now-asynchronous Rust
       // bridge lets WebKit paint it while image.open and ONNX inference run.
       await recognizeStaged(blob, path);
     } catch (error) {
-      setStatus(
-        `截图失败：${error instanceof Error ? error.message : String(error)}`,
-      );
+      setStatus(t("截图失败：{error}", {
+        error: localizeError(language, error),
+      }));
     } finally {
       captureInProgress.current = false;
     }
-  }, [busy, recognizeStaged]);
+  }, [busy, recognizeStaged, t]);
   useEffect(() => {
     let stop: (() => void) | undefined;
     void listen(
@@ -1528,9 +1637,9 @@ export function MainApp() {
     return () => stop?.();
   }, [screenshot]);
   const apiRecognize = async () => {
-    if (!imageId || !activeId) return setStatus("没有当前图片或可用 API 配置");
+    if (!imageId || !activeId) return setStatus(t("没有当前图片或可用 API 配置"));
     setBusy(true);
-    setStatus("正在进行 API 重识别…");
+    setStatus(t("正在进行 API 重识别…"));
     try {
       const result = await callSidecar<{
         raw_latex: string;
@@ -1553,12 +1662,12 @@ export function MainApp() {
       latexRef.current = value;
       resetEditGroup("api");
       if (result.history_id) setHistoryId(result.history_id);
-      setStatus(`API 完成 · ${result.profile_name}`);
+      setStatus(t("API 完成 · {name}", { name: result.profile_name }));
       if (settings.auto_copy) await copyWord(value);
     } catch (error) {
-      setStatus(
-        `API 识别失败：${error instanceof Error ? error.message : String(error)}`,
-      );
+      setStatus(t("API 识别失败：{error}", {
+        error: localizeError(language, error),
+      }));
     } finally {
       setBusy(false);
     }
@@ -1569,7 +1678,7 @@ export function MainApp() {
         callSidecar<RecordItem>("history.get", { id }),
         callSidecar<{ png_base64: string }>("history.image", { id }),
       ]);
-      if (!record) throw new Error("记录不存在");
+      if (!record) throw new Error(t("记录不存在"));
       const blob = pngBase64ToBlob(image.png_base64);
       const token = ++requestId.current;
       await openImage(blob, token);
@@ -1603,11 +1712,11 @@ export function MainApp() {
           ? record.api_draft_latex || ""
           : record.local_draft_latex || "";
       resetEditGroup(next);
-      setStatus("已恢复历史记录");
+      setStatus(t("已恢复历史记录"));
     } catch (error) {
-      setStatus(
-        `历史记录读取失败：${error instanceof Error ? error.message : String(error)}`,
-      );
+      setStatus(t("历史记录读取失败：{error}", {
+        error: localizeError(language, error),
+      }));
     }
   };
   const switchMode = async (nextMode: RecognitionMode) => {
@@ -1617,7 +1726,7 @@ export function MainApp() {
       latex &&
       activeBaseline &&
       latex !== activeBaseline &&
-      !window.confirm("切换识别模式会重新排版当前结果，是否继续？")
+      !window.confirm(t("切换识别模式会重新排版当前结果，是否继续？"))
     )
       return;
     try {
@@ -1650,10 +1759,10 @@ export function MainApp() {
       if (historyId)
         void callSidecar("history.setMode", { id: historyId, mode: nextMode });
       setStatus(
-        nextMode === "chemistry" ? "已切换为化学排版" : "已切换为数学排版",
+        t(nextMode === "chemistry" ? "已切换为化学排版" : "已切换为数学排版"),
       );
     } catch (error) {
-      setStatus(`切换模式失败：${String(error)}`);
+      setStatus(t("切换模式失败：{error}", { error: localizeError(language, error) }));
     }
   };
   const resizeImage = (event: ReactPointerEvent) => {
@@ -1728,7 +1837,7 @@ export function MainApp() {
       setStacks({ local: { undo: [], redo: [] }, api: { undo: [], redo: [] } });
       latexRef.current = "";
       resetEditGroup("local");
-      setStatus("当前历史记录已删除");
+      setStatus(t("当前历史记录已删除"));
     }
   };
   const undo = () => {
@@ -1773,7 +1882,7 @@ export function MainApp() {
           onClick={() => setDrawer((value) => !value)}
         >
           <History size={18} />
-          历史
+          {t("历史")}
         </button>
         <button
           className="toolbar-button primary"
@@ -1781,7 +1890,7 @@ export function MainApp() {
           disabled={busy}
         >
           <FolderOpen size={18} />
-          打开图片
+          {t("打开图片")}
         </button>
         <input
           ref={fileInput}
@@ -1807,14 +1916,14 @@ export function MainApp() {
                 value.startsWith("image/"),
               );
               if (item && type) void recognize(await item.getType(type));
-              else setStatus("剪贴板中没有图片");
+              else setStatus(t("剪贴板中没有图片"));
             } catch {
-              setStatus("无法读取剪贴板图片，请使用 Command–V");
+              setStatus(t("无法读取剪贴板图片，请使用 Command–V"));
             }
           }}
         >
           <ClipboardPaste size={18} />
-          粘贴图片
+          {t("粘贴图片")}
         </button>
         <button
           className="toolbar-button"
@@ -1822,20 +1931,20 @@ export function MainApp() {
           onClick={() => void screenshot()}
         >
           <ImageUp size={18} />
-          截图 OCR
+          {t("截图 OCR")}
         </button>
-        <div className="mode-selector" aria-label="识别模式">
+        <div className="mode-selector" aria-label={t("识别模式")}>
           <button
             className={mode === "chemistry" ? "active" : ""}
             onClick={() => void switchMode("chemistry")}
           >
-            化学
+            {t("化学")}
           </button>
           <button
             className={mode === "math" ? "active" : ""}
             onClick={() => void switchMode("math")}
           >
-            数学
+            {t("数学")}
           </button>
         </div>
         {apiEnabled && profiles.some((profile) => profile.enabled) && (
@@ -1846,22 +1955,25 @@ export function MainApp() {
               onClick={() => void apiRecognize()}
             >
               <Sparkles size={18} />
-              API 重识别
+              {t("API 重识别")}
             </button>
             <button
               className="profile-pill"
               onClick={() => showSettings("自定义模型与 API")}
             >
-              {activeProfile?.name || "当前 API 配置"}
+              <span className="profile-name">
+                {activeProfile?.name || t("当前 API 配置")}
+              </span>
               <span className="pill-dot" />
             </button>
           </>
         )}
         <span className="toolbar-spacer" />
-        <span className="status-pill">离线识别</span>
+        <span className="status-pill">{t("离线识别")}</span>
         <button
           className="icon-button"
-          aria-label="设置"
+          aria-label={t("设置")}
+          title={t("设置")}
           onClick={() => showSettings()}
         >
           <Settings size={18} />
@@ -1876,11 +1988,11 @@ export function MainApp() {
       >
         <div className="image-card">
           {imageUrl ? (
-            <img className="source-image" src={imageUrl} alt="当前公式图片" />
+            <img className="source-image" src={imageUrl} alt={t("当前公式图片")} />
           ) : (
             <div className="empty-state">
               <ImageUp size={32} />
-              <span>打开、粘贴或截图一张公式</span>
+              <span>{t("打开、粘贴或截图一张公式")}</span>
             </div>
           )}
         </div>
@@ -1888,11 +2000,11 @@ export function MainApp() {
           className="split-handle horizontal"
           onPointerDown={resizeImage}
           role="separator"
-          aria-label="调整图片与结果比例"
+          aria-label={t("调整图片与结果比例")}
         />
         <section className="result-card" ref={resultPane}>
           <div className="result-toolbar">
-            <strong>识别结果</strong>
+            <strong>{t("识别结果")}</strong>
             {localLatex && (
               <button
                 className={
@@ -1902,7 +2014,7 @@ export function MainApp() {
                 }
                 onClick={() => selectSource("local")}
               >
-                内置
+                {t("内置")}
               </button>
             )}
             {apiLatex && (
@@ -1914,13 +2026,13 @@ export function MainApp() {
                 }
                 onClick={() => selectSource("api")}
               >
-                API · {activeProfile?.name || "配置"}
+                {t("API · {name}", { name: activeProfile?.name || t("配置") })}
               </button>
             )}
             <button
               className={`icon-button edit-history-button ${stacks[source].undo.length ? "is-active" : ""}`}
-              aria-label="撤销"
-              title="撤销"
+              aria-label={t("撤销")}
+              title={t("撤销")}
               disabled={!stacks[source].undo.length}
               onClick={undo}
             >
@@ -1928,8 +2040,8 @@ export function MainApp() {
             </button>
             <button
               className={`icon-button edit-history-button ${stacks[source].redo.length ? "is-active" : ""}`}
-              aria-label="重做"
-              title="重做"
+              aria-label={t("重做")}
+              title={t("重做")}
               disabled={!stacks[source].redo.length}
               onClick={redo}
             >
@@ -1944,7 +2056,7 @@ export function MainApp() {
               }}
             >
               <RotateCcw size={16} />
-              恢复原文
+              {t("恢复原文")}
             </button>
             <span className="toolbar-spacer" />
             <button
@@ -1953,18 +2065,18 @@ export function MainApp() {
               onClick={() => void copyWord()}
             >
               <Copy size={16} />
-              复制 Word
+              {t("复制 Word")}
             </button>
             <button
               className="secondary-button"
               disabled={!latex.trim()}
               onClick={() => {
                 void navigator.clipboard.writeText(latex);
-                setStatus("已复制 LaTeX");
+                setStatus(t("已复制 LaTeX"));
               }}
             >
               <Copy size={16} />
-              复制 LaTeX
+              {t("复制 LaTeX")}
             </button>
           </div>
           <div
@@ -1975,17 +2087,17 @@ export function MainApp() {
           >
             <section className="editor-pane">
               <h2>LaTeX</h2>
-              <LatexEditor value={latex} onChange={updateLatex} />
+              <LatexEditor value={latex} onChange={updateLatex} language={language} />
             </section>
             <div
               className="split-handle vertical"
               onPointerDown={resizeResult}
               role="separator"
-              aria-label="调整 LaTeX 与预览比例"
+              aria-label={t("调整 LaTeX 与预览比例")}
             />
             <section className="preview-pane">
-              <h2>公式预览</h2>
-              <MathPreview latex={latex} />
+              <h2>{t("公式预览")}</h2>
+              <MathPreview latex={latex} language={language} />
             </section>
           </div>
         </section>
@@ -2002,7 +2114,7 @@ export function MainApp() {
               void emit("formulaocr://settings-updated");
             }}
           />
-          识别完成后自动复制 Word 格式
+          {t("识别完成后自动复制 Word 格式")}
         </label>
         <span>{status}</span>
       </footer>
@@ -2014,7 +2126,7 @@ export function MainApp() {
             style={{ width: layout.drawerWidth }}
           >
             <div className="drawer-header">
-              <strong>识别历史</strong>
+              <strong>{t("识别历史")}</strong>
               <span className="toolbar-spacer" />
               {selectedRecords.length > 0 && (
                 <button
@@ -2022,7 +2134,7 @@ export function MainApp() {
                   onClick={async () => {
                     if (
                       !window.confirm(
-                        `删除所选 ${selectedRecords.length} 条记录？`,
+                        t("删除所选 {count} 条记录？", { count: selectedRecords.length }),
                       )
                     )
                       return;
@@ -2037,26 +2149,26 @@ export function MainApp() {
                     setSelectedRecords([]);
                   }}
                 >
-                  删除所选
+                  {t("删除所选")}
                 </button>
               )}
               {records.length > 0 && (
                 <button
                   className="text-danger"
                   onClick={async () => {
-                    if (!window.confirm("删除全部识别历史？")) return;
+                    if (!window.confirm(t("删除全部识别历史？"))) return;
                     await callSidecar("history.deleteAll");
                     setRecords([]);
                     setSelectedRecords([]);
                   }}
                 >
-                  全部删除
+                  {t("全部删除")}
                 </button>
               )}
               <button
                 className="icon-button"
                 onClick={() => setDrawer(false)}
-                aria-label="关闭"
+                aria-label={t("关闭")}
               >
                 <X size={17} />
               </button>
@@ -2089,20 +2201,20 @@ export function MainApp() {
                       )}
                       <span className="history-item-copy">
                       <span>
-                        {new Date(record.updated_at * 1000).toLocaleString()} ·{" "}
-                        {record.has_api ? "API" : "内置"}
+                        {new Date(record.updated_at * 1000).toLocaleString(language === "en" ? "en-AU" : "zh-CN")} ·{" "}
+                        {record.has_api ? "API" : t("内置")}
                       </span>
                       <small>
                         {(record.active_source === "api"
                           ? record.api_draft_latex
-                          : record.local_draft_latex) || "无 LaTeX 结果"}
+                          : record.local_draft_latex) || t("无 LaTeX 结果")}
                       </small>
                       </span>
                     </button>
                     <button
                       className="icon-button danger"
                       onClick={() => void deleteRecord(record.id)}
-                      aria-label="删除历史记录"
+                      aria-label={t("删除历史记录")}
                     >
                       <Trash2 size={16} />
                     </button>
@@ -2110,7 +2222,7 @@ export function MainApp() {
                 ))}
               </div>
             ) : (
-              <div className="drawer-empty">暂无识别记录</div>
+              <div className="drawer-empty">{t("暂无识别记录")}</div>
             )}
             <div
               className="drawer-resize"
@@ -2141,6 +2253,7 @@ export function MainApp() {
           <SettingsCenter
             inline
             initialPage="常规"
+            initialLanguage={language}
             onClose={() => setSettingsFallback(false)}
           />
         </div>

@@ -19,13 +19,15 @@ button, textarea, input, select { font: inherit; }
 button { border: 0; cursor: pointer; }
 button:disabled { cursor: default; opacity: .55; }
 .app-shell { display: grid; grid-template-rows: 58px minmax(0, 1fr) 38px; height: 100vh; overflow: hidden; }
-.toolbar { display: flex; align-items: center; gap: 9px; padding: 10px 18px; border-bottom: 1px solid #d8d8dc; background: rgba(255,255,255,.78); backdrop-filter: blur(18px); }
+.toolbar { display: flex; min-width: 0; align-items: center; gap: 9px; padding: 10px 18px; border-bottom: 1px solid #d8d8dc; overflow-x: auto; scrollbar-width: none; background: rgba(255,255,255,.78); backdrop-filter: blur(18px); }
+.toolbar::-webkit-scrollbar { display: none; }
 .toolbar-button, .secondary-button, .profile-pill, .source-selector { display: inline-flex; align-items: center; gap: 7px; min-height: var(--control-regular); padding: 0 13px; border: 1px solid #d3d3d8; border-radius: 9px; background: #fff; color: #242426; white-space: nowrap; font-size: var(--type-control); font-weight: 500; }
 .toolbar-button:hover, .secondary-button:hover, .profile-pill:hover { background: #f0f0f3; }
 .toolbar-button.primary { background: #0a84ff; border-color: #0a84ff; color: #fff; }
 .profile-pill, .source-selector, .status-pill { font-size: var(--type-supporting); }
+.profile-pill .profile-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .toolbar-spacer { flex: 1; }
-.status-pill { padding: 6px 10px; border-radius: 999px; color: #4a4a4f; background: #e9e9ed; }
+.status-pill { padding: 6px 10px; border-radius: 999px; color: #4a4a4f; background: #e9e9ed; white-space: nowrap; }
 .icon-button { display: inline-grid; place-items: center; width: var(--control-regular); height: var(--control-regular); padding: 0; border-radius: 9px; background: transparent; color: #4c4c50; }
 .icon-button > svg { width: var(--icon-action); height: var(--icon-action); flex: 0 0 auto; }
 .toolbar-button > svg { width: 18px; height: 18px; flex: 0 0 auto; }
@@ -121,7 +123,8 @@ body:has(.settings-app), body:has(.settings-app) #root { width: 100%; height: 10
    page content can scroll inside its own pane instead of overflowing the
    WebView below the visible window. */
 .settings-app { width: 100%; height: 100vh; min-width: 0; min-height: 0; display: flex; flex-direction: column; overflow: hidden; }
-.settings-tabs { display: flex; flex: 0 0 auto; align-items: center; justify-content: center; gap: 4px; min-height: 58px; padding: 10px 18px; border-bottom: 1px solid #dedee2; background: rgba(255,255,255,.82); backdrop-filter: blur(18px); }
+.settings-tabs { display: flex; flex: 0 0 auto; align-items: center; justify-content: safe center; gap: 4px; min-height: 58px; padding: 10px 18px; border-bottom: 1px solid #dedee2; overflow-x: auto; scrollbar-width: none; background: rgba(255,255,255,.82); backdrop-filter: blur(18px); }
+.settings-tabs::-webkit-scrollbar { display: none; }
 .settings-tabs .settings-nav-item { width: auto; min-height: var(--control-regular); margin: 0; padding: 0 15px; text-align: center; white-space: nowrap; }
 .settings-app > .settings-page { flex: 1 1 auto; width: min(980px, 100%); margin: 0 auto; padding: 24px 36px 16px; }
 .settings-app > .settings-page .page-heading { padding-bottom: 14px; }
@@ -216,6 +219,11 @@ body:has(.settings-app), body:has(.settings-app) #root { width: 100%; height: 10
 .mode-selector { display: inline-flex; padding: 2px; border: 1px solid #d3d3d8; border-radius: 9px; background: #ececf0; }
 .mode-selector button { min-height: 30px; padding: 0 11px; border-radius: 7px; background: transparent; color: #626267; font-size: var(--type-supporting); font-weight: 500; }
 .mode-selector button.active { background: #fff; color: #1d1d1f; box-shadow: 0 1px 3px rgba(0,0,0,.12); }
+html[lang="en"] .toolbar { gap: 6px; padding-inline: 12px; }
+html[lang="en"] .toolbar-button { gap: 6px; padding-inline: 9px; font-size: 13px; }
+html[lang="en"] .mode-selector button { padding-inline: 8px; }
+html[lang="en"] .profile-pill { width: min(140px, 14vw); padding-inline: 10px; }
+html[lang="en"] .status-pill { padding-inline: 8px; }
 @media (prefers-color-scheme: dark) {
   .settings-app { color: #f5f5f7; background: #1c1c1e; }
   .settings-tabs { background: rgba(35,35,38,.9); border-color: #48484a; }

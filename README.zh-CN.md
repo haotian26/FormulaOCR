@@ -28,6 +28,7 @@ FormulaOCR 是一个用来处理公式截图的小工具。你可以从论文、
 - 复制 LaTeX，或复制成可继续编辑的 Word 公式。
 - 在本机保存识别历史，并分别保留本地和 API 结果草稿。
 - 支持菜单栏运行和可自定义的截图快捷键。
+- 可在设置中切换完整的简体中文或英文界面。
 - 在本地结果不理想时，可以手动调用 OpenAI-compatible 或 Mathpix API
   再识别一次。
 
@@ -94,5 +95,5 @@ OpenAI Codex 协助。完整说明见 [CONTRIBUTORS.md](CONTRIBUTORS.md)。
 
 ## 许可证
 
-本项目采用 Apache-2.0 许可证。第三方组件和模型来源见
+本项目采用 MIT 许可证。第三方组件和模型来源见
 [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)。

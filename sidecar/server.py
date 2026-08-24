@@ -182,6 +182,7 @@ class Sidecar:
                     "layout_restore_mode": "remember_window_history_closed",
                     "layout_version": 2,
                     "default_recognition_mode": "chemistry",
+                    "language": "zh-CN",
                 }
             return json.loads(path.read_text(encoding="utf-8"))
         if method == "settings.save":

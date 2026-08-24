@@ -3,6 +3,7 @@ name = "formulaocr"
 version = "0.3.0"
 description = "FormulaOCR native macOS shell"
 authors = ["FormulaOCR"]
+license = "MIT"
 edition = "2021"
 
 [lib]

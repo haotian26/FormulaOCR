@@ -1,5 +1,17 @@
 # 更新日志 / Change Log
 
+## [Unreleased]
+
+### 中文
+
+- 项目自身许可证由 Apache-2.0 改为 MIT，第三方组件和模型继续保留各自原有许可声明。
+- 新增可持久化的简体中文/英文界面切换，覆盖主窗口、设置中心、历史、API、状态提示和菜单栏。
+
+### English
+
+- Changed the project license from Apache-2.0 to MIT while retaining the original licenses and notices for third-party components and the bundled model.
+- Added a persistent Simplified Chinese/English interface switch across the main window, settings, history, API, status messages, and menu bar.
+
 ## [0.3.0] - 2026-08-24
 
 ### 中文

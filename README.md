@@ -29,6 +29,7 @@ the current image when you click **API re-recognize**.
 - Copy LaTeX or an editable Word equation.
 - Keep local recognition history and separate local/API drafts.
 - Run from the menu bar and use a configurable screenshot shortcut.
+- Switch the complete interface between English and Simplified Chinese.
 - Connect to OpenAI-compatible or Mathpix APIs when local recognition needs a
   second opinion.
 
@@ -95,5 +96,5 @@ please use a small non-private image and include the raw LaTeX output.
 
 ## License
 
-Apache-2.0. Third-party components and model attribution are listed in
+MIT. Third-party components and model attribution are listed in
 [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).

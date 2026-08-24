@@ -1,0 +1,21 @@
+# Front-end and Rust build outputs
+node_modules/
+dist/
+tsconfig.tsbuildinfo
+src-tauri/target/
+*.dmg
+*.app/
+
+# Python caches and local test state
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.DS_Store
+
+# Large model weights are fetched by tools/download_model.py and bundled only
+# in release artifacts, never in Git.
+resources/models/
+tests/samples/
+
+# Local developer-only data
+.formulaocr-dev/

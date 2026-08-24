@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" viewBox="0 0 1024 1024">
+  <defs>
+    <linearGradient id="formulaMark" x1="220" y1="190" x2="790" y2="850" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#5B5CE2"/>
+      <stop offset="1" stop-color="#2684FF"/>
+    </linearGradient>
+  </defs>
+  <path
+    fill="url(#formulaMark)"
+    d="M190 176h642v142H474l214 194-220 194h364v142H184l292-336L190 176Z"
+  />
+  <circle cx="853" cy="827" r="61" fill="#25C7B7"/>
+</svg>

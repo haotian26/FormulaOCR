@@ -1,7 +1,7 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
   "productName": "FormulaOCR",
-  "version": "0.3.0",
+  "version": "0.4.0",
   "identifier": "com.formulaocr.FormulaOCRApp",
   "build": { "beforeDevCommand": "npm run dev", "beforeBuildCommand": "npm run build", "devUrl": "http://localhost:1420", "frontendDist": "../dist" },
   "app": { "windows": [{ "title": "FormulaOCR", "width": 1120, "height": 760, "minWidth": 900, "minHeight": 650, "resizable": true }], "security": { "csp": "default-src 'self' ipc: http://ipc.localhost; img-src 'self' asset: http://asset.localhost blob: data:; style-src 'self' 'unsafe-inline'; connect-src ipc: http://ipc.localhost asset: http://asset.localhost", "assetProtocol": { "enable": true, "scope": ["$TEMP/formulaocr-stage/**", "$HOME/Library/Application Support/FormulaOCR/history/images/**"] } } },

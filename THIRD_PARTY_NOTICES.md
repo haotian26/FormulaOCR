@@ -21,7 +21,7 @@ actual dependency closure before release.
 - License stated by the model README: Apache License 2.0
 - SHA256: `5ef81a0b197ea2c8c1463b31c3eb2ad0ae1eb655fb1ff3b550858c7d85bc84e8`
 
-## 0.3.0 runtime dependencies
+## 0.4.0 runtime dependencies
 
 - ONNX Runtime, NumPy, Pillow and tokenizers: see the exact version ranges in
   `pyproject.toml`; used for the offline OCR runtime.

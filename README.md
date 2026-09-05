@@ -38,7 +38,7 @@ the current image when you click **API re-recognize**.
 Download the latest DMG from [Releases](https://github.com/haotian26/FormulaOCR/releases/latest),
 open it, and drag FormulaOCR into Applications.
 
-The current build is for Apple Silicon (`arm64`). It is ad-hoc signed but not
+The current build is for Apple Silicon (`arm64`) with macOS 14 or newer. It is ad-hoc signed but not
 Apple-notarized, so macOS may ask you to Control-click the app and choose
 **Open** the first time. Screenshot OCR also needs Screen Recording permission.
 
@@ -55,7 +55,7 @@ Apple-notarized, so macOS may ask you to Control-click the app and choose
 
 ## Build from source
 
-You will need Apple Silicon macOS, Xcode Command Line Tools, Rust, Node.js 20+
+You will need Apple Silicon macOS 14+, Xcode Command Line Tools, Rust, Node.js 20+
 and Python 3.10–3.13.
 
 ```bash

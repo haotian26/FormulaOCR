@@ -12,7 +12,7 @@ import {
   FolderOpen,
   History,
   ImageUp,
-  Settings,
+  Settings as SettingsIcon,
   Sparkles,
   Undo2,
   Redo2,
@@ -37,60 +37,10 @@ import {
   type AppLanguage,
 } from "./i18n";
 
-type Source = "local" | "api";
-type RecognitionMode = "chemistry" | "math";
-type Settings = {
-  auto_copy: boolean;
-  hide_dock_on_close: boolean;
-  hotkey: string;
-  history_limit: number;
-  layout_restore_mode: string;
-  layout_version?: number;
-  default_recognition_mode: RecognitionMode;
-  language: AppLanguage;
-};
-type Profile = {
-  id: string;
-  name: string;
-  enabled: boolean;
-  provider_type: string;
-  base_url?: string;
-  model?: string;
-  timeout_s?: number;
-  prompt_override?: string;
-  api_key?: string;
-  app_id?: string;
-  app_key?: string;
-};
-type RecordItem = {
-  id: string;
-  image_path: string;
-  created_at: number;
-  updated_at: number;
-  local_raw_latex: string;
-  local_formatted_latex?: string;
-  local_draft_latex: string;
-  local_render_error?: string | null;
-  api_raw_latex?: string | null;
-  api_formatted_latex?: string | null;
-  api_draft_latex?: string | null;
-  api_profile_name?: string | null;
-  api_model?: string | null;
-  active_source?: string;
-  recognition_mode?: RecognitionMode;
-  has_api?: boolean;
-};
-type Layout = { image: number; result: number; drawerWidth: number };
-
-const defaults: Settings = {
-  auto_copy: false,
-  hide_dock_on_close: true,
-  hotkey: "ctrl+alt+cmd+o",
-  history_limit: 200,
-  layout_restore_mode: "remember_window_history_closed",
-  default_recognition_mode: "chemistry",
-  language: "zh-CN",
-};
+import { defaults, type Settings, type Source, type RecognitionMode, type Profile, type RecordItem, type Layout } from "./types";
+import { SettingsCenter } from "./SettingsCenter";
+import { useTauriEvent } from "./hooks";
+import { DraftQueue, readLayout, DEFAULT_LAYOUT } from "./state";
 
 function pngBase64ToBlob(value: string): Blob {
   const binary = window.atob(value);
@@ -128,9 +78,7 @@ function openSettings(
         created = true;
       });
       void child.once("tauri://error", () => onFallback?.());
-      window.setTimeout(() => {
-        if (!created) onFallback?.();
-      }, 1200);
+
     } catch {
       onFallback?.();
     }
@@ -256,945 +204,14 @@ function MathPreview({
   );
 }
 
-function HotkeyRecorder({
-  value,
-  onChange,
-  error,
-  setError,
-  language,
-}: {
-  value: string;
-  onChange: (value: string) => void;
-  error: string;
-  setError: (value: string) => void;
-  language: AppLanguage;
-}) {
-  const [recording, setRecording] = useState(false);
-  const modifierKeys = new Set(["Meta", "Control", "Alt", "Shift"]);
-  useEffect(() => {
-    if (!recording) return;
-    const onKeyDown = (event: KeyboardEvent) => {
-      event.preventDefault();
-      event.stopPropagation();
-      if (event.key === "Escape") {
-        onChange("");
-        setError("");
-        setRecording(false);
-        return;
-      }
-      if (modifierKeys.has(event.key)) return;
-      const parts: string[] = [];
-      if (event.ctrlKey) parts.push("ctrl");
-      if (event.altKey) parts.push("alt");
-      if (event.shiftKey) parts.push("shift");
-      if (event.metaKey) parts.push("cmd");
-      if (!parts.length) {
-        setError(translate(language, "请使用至少一个修饰键和一个主键"));
-        return;
-      }
-      const key =
-        event.key.length === 1
-          ? event.key.toLowerCase()
-          : event.key.toLowerCase().replace("arrow", "");
-      if (!key || key === "unidentified") {
-        setError(translate(language, "不支持的主键"));
-        return;
-      }
-      parts.push(key);
-      onChange(parts.join("+"));
-      setError("");
-      setRecording(false);
-    };
-    window.addEventListener("keydown", onKeyDown, true);
-    return () => window.removeEventListener("keydown", onKeyDown, true);
-  }, [recording, onChange, setError, language]);
-  const labels: Record<string, string> = {
-    cmd: "⌘",
-    ctrl: "⌃",
-    alt: "⌥",
-    shift: "⇧",
-  };
-  const display = value
-    ? value
-        .split("+")
-        .map((part) => labels[part] || part.toUpperCase())
-        .join(" ")
-    : translate(language, "未设置");
-  return (
-    <div className="hotkey-recorder">
-      <button
-        className={recording ? "keycap recording" : "keycap"}
-        onClick={() => {
-          setRecording(true);
-          setError("");
-        }}
-      >
-        {recording ? translate(language, "请按组合键…") : display}
-      </button>
-      <span className="field-help">
-        {translate(language, "点击后按组合键，Esc 清空")}
-      </span>
-      {error && <span className="field-error">{error}</span>}
-    </div>
-  );
-}
-
-function SettingsCenter({
-  inline = false,
-  initialPage,
-  initialLanguage = "zh-CN",
-  onClose,
-}: {
-  inline?: boolean;
-  initialPage?: string;
-  initialLanguage?: AppLanguage;
-  onClose?: () => void;
-}) {
-  const params = new URLSearchParams(window.location.search);
-  const pages = [
-    "常规",
-    "界面与布局",
-    "快捷键",
-    "自定义模型与 API",
-    "历史记录",
-  ];
-  const [page, setPage] = useState(initialPage || params.get("page") || "常规");
-  const initialSettings = { ...defaults, language: initialLanguage };
-  const [settings, setSettings] = useState<Settings>(initialSettings);
-  const [savedSettings, setSavedSettings] = useState<Settings>(initialSettings);
-  const [profiles, setProfiles] = useState<Profile[]>([]);
-  const [savedProfiles, setSavedProfiles] = useState<Profile[]>([]);
-  const [apiEnabled, setApiEnabled] = useState(false);
-  const [savedApiEnabled, setSavedApiEnabled] = useState(false);
-  const [activeId, setActiveId] = useState("");
-  const [savedActiveId, setSavedActiveId] = useState("");
-  const [selectedId, setSelectedId] = useState("");
-  const [models, setModels] = useState<string[]>([]);
-  const [busy, setBusy] = useState(false);
-  const [feedback, setFeedback] = useState("");
-  const [error, setError] = useState("");
-  const [hotkeyError, setHotkeyError] = useState("");
-  const [confirmDiscard, setConfirmDiscard] = useState(false);
-  const allowCloseRef = useRef(false);
-  const language = normalizeLanguage(settings.language);
-  const t = (text: string, values?: Record<string, string | number>) =>
-    translate(language, text, values);
-  const selected = profiles.find((profile) => profile.id === selectedId);
-  const settingsDirty =
-    JSON.stringify(settings) !== JSON.stringify(savedSettings);
-  const profilesDirty =
-    apiEnabled !== savedApiEnabled ||
-    activeId !== savedActiveId ||
-    JSON.stringify(profiles) !== JSON.stringify(savedProfiles);
-  const pageKeys: Record<string, (keyof Settings)[]> = {
-    常规: [
-      "auto_copy",
-      "hide_dock_on_close",
-      "default_recognition_mode",
-      "language",
-    ],
-    界面与布局: ["layout_restore_mode"],
-    快捷键: ["hotkey"],
-    历史记录: ["history_limit"],
-  };
-  const currentSettingsDirty = (pageKeys[page] || []).some(
-    (key) => settings[key] !== savedSettings[key],
-  );
-  useEffect(() => {
-    void callSidecar<Settings>("settings.get")
-      .then((value) => {
-        const normalized = {
-          ...defaults,
-          ...value,
-          language: normalizeLanguage(value.language),
-        };
-        setSettings(normalized);
-        setSavedSettings(normalized);
-        void invoke("set_global_hotkey", {
-          shortcut: value.hotkey || "",
-        }).catch(() => undefined);
-      })
-      .catch((caught) => setError(localizeError(language, caught)));
-    void callSidecar<{
-      api_enabled: boolean;
-      active_profile_id: string;
-      profiles: Profile[];
-    }>("profiles.list")
-      .then((value) => {
-        setApiEnabled(value.api_enabled);
-        setSavedApiEnabled(value.api_enabled);
-        setActiveId(value.active_profile_id);
-        setSavedActiveId(value.active_profile_id);
-        setProfiles(value.profiles);
-        setSavedProfiles(value.profiles.map((profile) => ({ ...profile })));
-        setSelectedId(value.active_profile_id || value.profiles[0]?.id || "");
-      })
-      .catch((caught) => setError(localizeError(language, caught)));
-  }, []);
-  useEffect(() => {
-    document.documentElement.lang = language;
-    if (!inline)
-      void getCurrentWindow().setTitle(t("FormulaOCR 设置")).catch(() =>
-        undefined,
-      );
-  }, [inline, language]);
-  useEffect(() => {
-    let stop: (() => void) | undefined;
-    void listen<string>("formulaocr://settings-page", (event) =>
-      setPage(event.payload),
-    ).then((unlisten) => {
-      stop = unlisten;
-    });
-    return () => stop?.();
-  }, []);
-  useEffect(() => {
-    if (inline) return;
-    const defaultsByPage: Record<string, [number, number]> = {
-      常规: [820, 500],
-      界面与布局: [820, 520],
-      快捷键: [820, 440],
-      "自定义模型与 API": [940, 720],
-      历史记录: [820, 440],
-    };
-    const storageKey = `formulaocr.settings.size.v2.${page}`;
-    let target = defaultsByPage[page] || [820, 520];
-    try {
-      const savedSize = JSON.parse(
-        localStorage.getItem(storageKey) || "null",
-      ) as { width?: number; height?: number } | null;
-      if (savedSize?.width && savedSize?.height)
-        target = [
-          Math.max(760, savedSize.width),
-          Math.max(420, savedSize.height),
-        ];
-    } catch {
-      /* corrupted UI state falls back to the safe page default */
-    }
-    const current = getCurrentWindow();
-    void invoke("resize_settings_window", {
-      width: target[0],
-      height: target[1],
-    }).catch(() => undefined);
-    let stop: (() => void) | undefined;
-    const timer = window.setTimeout(() => {
-      void current
-        .onResized(({ payload }) => {
-          localStorage.setItem(
-            storageKey,
-            JSON.stringify({
-              width: payload.width / window.devicePixelRatio,
-              height: payload.height / window.devicePixelRatio,
-            }),
-          );
-        })
-        .then((unlisten) => {
-          stop = unlisten;
-        });
-    }, 250);
-    return () => {
-      window.clearTimeout(timer);
-      stop?.();
-    };
-  }, [inline, page]);
-  useEffect(() => {
-    if (inline) return;
-    let unlisten: (() => void) | undefined;
-    void getCurrentWindow()
-      .onCloseRequested((event) => {
-        if (allowCloseRef.current) return;
-        if (settingsDirty || profilesDirty) {
-          event.preventDefault();
-          setConfirmDiscard(true);
-        }
-      })
-      .then((stop) => {
-        unlisten = stop;
-      });
-    return () => unlisten?.();
-  }, [inline, settingsDirty, profilesDirty]);
-  const close = () => {
-    if (settingsDirty || profilesDirty) {
-      setConfirmDiscard(true);
-      return;
-    }
-    if (inline) onClose?.();
-    else void getCurrentWindow().close();
-  };
-  const discardAndClose = () => {
-    setConfirmDiscard(false);
-    if (inline) {
-      onClose?.();
-      return;
-    }
-    allowCloseRef.current = true;
-    // Destroy bypasses a second close-request round-trip after the user has
-    // explicitly confirmed discarding the draft.
-    void getCurrentWindow().destroy();
-  };
-  const saved = (message = t("已保存")) => {
-    void emit("formulaocr://settings-updated");
-    setFeedback(message);
-    window.setTimeout(() => setFeedback(""), 1500);
-  };
-  const saveSettings = async () => {
-    if (hotkeyError) return;
-    try {
-      const persisted = await callSidecar<Settings>("settings.get");
-      const values = { ...defaults, ...persisted };
-      for (const key of pageKeys[page] || [])
-        (values as Record<string, unknown>)[key] = settings[key];
-      if (page === "快捷键")
-        await invoke("set_global_hotkey", { shortcut: settings.hotkey });
-      const value = await callSidecar<Settings>("settings.save", {
-        values: { ...values, layout_version: 3 },
-      });
-      setSavedSettings((previous) => {
-        const next = { ...previous };
-        for (const key of pageKeys[page] || [])
-          (next as Record<string, unknown>)[key] = value[key];
-        return next;
-      });
-      if (page === "历史记录")
-        await callSidecar("history.setLimit", {
-          limit: settings.history_limit,
-        });
-      if (page === "常规")
-        await invoke("set_menu_language", { language: value.language });
-      saved();
-    } catch (caught) {
-      setError(localizeError(language, caught));
-    }
-  };
-  const saveProfiles = async () => {
-    try {
-      const value = await callSidecar<{
-        api_enabled: boolean;
-        active_profile_id: string;
-        profiles: Profile[];
-      }>("profiles.save", {
-        api_enabled: apiEnabled,
-        active_profile_id: activeId,
-        profiles,
-      });
-      setApiEnabled(value.api_enabled);
-      setSavedApiEnabled(value.api_enabled);
-      setActiveId(value.active_profile_id);
-      setSavedActiveId(value.active_profile_id);
-      setProfiles(value.profiles);
-      setSavedProfiles(value.profiles.map((profile) => ({ ...profile })));
-      setSelectedId(value.active_profile_id || value.profiles[0]?.id || "");
-      saved();
-    } catch (caught) {
-      setError(localizeError(language, caught));
-    }
-  };
-  const patchProfile = (patch: Partial<Profile>) =>
-    setProfiles((items) =>
-      items.map((profile) =>
-        profile.id === selectedId ? { ...profile, ...patch } : profile,
-      ),
-    );
-  const fetchModels = async () => {
-    if (!selected) return;
-    setBusy(true);
-    setError("");
-    try {
-      const result = await callSidecar<{ models: string[]; message?: string }>(
-        "api.listModels",
-        { profile_id: selected.id, profile: selected },
-      );
-      setModels(result.models);
-      saved(
-        language === "en"
-          ? t("已获取 {count} 个模型", { count: result.models.length })
-          : result.message ||
-            t("已获取 {count} 个模型", { count: result.models.length }),
-      );
-    } catch (caught) {
-      setError(localizeError(language, caught));
-    } finally {
-      setBusy(false);
-    }
-  };
-  const testProfile = async () => {
-    if (!selected) return;
-    setBusy(true);
-    setError("");
-    try {
-      const result = await callSidecar<{ message: string; models?: string[] }>(
-        "api.testProfile",
-        { profile_id: selected.id, profile: selected },
-      );
-      if (result.models) setModels(result.models);
-      saved(language === "en" ? t("配置测试成功") : result.message);
-    } catch (caught) {
-      setError(localizeError(language, caught));
-    } finally {
-      setBusy(false);
-    }
-  };
-  const resetLayout = () => {
-    localStorage.removeItem("formulaocr.layout.v2");
-    saved(t("布局已重置"));
-  };
-  const addProfile = () => {
-    const profile: Profile = {
-      id: crypto.randomUUID().replaceAll("-", ""),
-      name: t("新配置"),
-      provider_type: "openai_compatible",
-      base_url: "",
-      model: "",
-      enabled: true,
-      timeout_s: 45,
-      prompt_override: "",
-    };
-    setProfiles((items) => [...items, profile]);
-    setSelectedId(profile.id);
-  };
-  return (
-    <main
-      className={inline ? "settings-app inline" : "settings-app standalone"}
-    >
-      <nav className="settings-tabs" aria-label={t("设置分类")}>
-        {pages.map((item) => (
-          <button
-            key={item}
-            className={
-              page === item ? "settings-nav-item selected" : "settings-nav-item"
-            }
-            onClick={() => setPage(item)}
-          >
-            {t(item)}
-          </button>
-        ))}
-      </nav>
-      <section className="settings-page">
-        <div className="page-heading">
-          <h2>{t(page)}</h2>
-          <p>
-            {page === "自定义模型与 API"
-              ? t("管理仅由你主动触发的远程重识别配置。")
-              : t("FormulaOCR 的本机行为与显示选项。")}
-          </p>
-        </div>
-        <div className="settings-page-content">
-          {page === "常规" && (
-            <div className="settings-card">
-              <Toggle
-                checked={settings.auto_copy}
-                onChange={(value) =>
-                  setSettings({ ...settings, auto_copy: value })
-                }
-                title={t("识别完成后自动复制 Word 格式")}
-                description={t("本地或 API 识别完成后自动写入剪贴板。")}
-              />
-              <Toggle
-                checked={settings.hide_dock_on_close}
-                onChange={(value) =>
-                  setSettings({ ...settings, hide_dock_on_close: value })
-                }
-                title={t("关闭窗口时隐藏 Dock 图标")}
-                description={t("菜单栏继续运行，可从菜单栏重新打开主窗口。")}
-              />
-              <label className="setting-field">
-                <span>{t("界面语言")}</span>
-                <select
-                  value={language}
-                  onChange={(event) =>
-                    setSettings({
-                      ...settings,
-                      language: normalizeLanguage(event.target.value),
-                    })
-                  }
-                >
-                  <option value="zh-CN">{t("简体中文")}</option>
-                  <option value="en">English</option>
-                </select>
-              </label>
-              <label className="setting-field">
-                <span>{t("默认识别模式")}</span>
-                <select
-                  value={settings.default_recognition_mode}
-                  onChange={(event) =>
-                    setSettings({
-                      ...settings,
-                      default_recognition_mode: event.target
-                        .value as RecognitionMode,
-                    })
-                  }
-                >
-                  <option value="chemistry">{t("化学")}</option>
-                  <option value="math">{t("数学")}</option>
-                </select>
-              </label>
-            </div>
-          )}
-          {page === "界面与布局" && (
-            <div className="settings-card">
-              <p className="field-help">
-                {t("窗口尺寸通过拖动调整；这里控制下次启动如何恢复窗口和分隔比例。")}
-              </p>
-              {[
-                ["remember_window_history_closed", "记住尺寸，历史关闭"],
-                ["restore_full_state", "完整恢复上次状态"],
-                ["optimized_default", "每次使用优化默认布局"],
-              ].map(([value, label]) => (
-                <label className="radio-row" key={value}>
-                  <input
-                    type="radio"
-                    name="layout"
-                    checked={settings.layout_restore_mode === value}
-                    onChange={() =>
-                      setSettings({ ...settings, layout_restore_mode: value })
-                    }
-                  />
-                  <span>{t(label)}</span>
-                </label>
-              ))}
-              <button className="secondary-button" onClick={resetLayout}>
-                <SlidersHorizontal size={17} />
-                {t("立即重置布局")}
-              </button>
-            </div>
-          )}
-          {page === "快捷键" && (
-            <div className="settings-card">
-              <label className="setting-field">
-                <span>{t("截图快捷键")}</span>
-                <HotkeyRecorder
-                  value={settings.hotkey}
-                  onChange={(value) =>
-                    setSettings({ ...settings, hotkey: value })
-                  }
-                  error={hotkeyError}
-                  setError={setHotkeyError}
-                  language={language}
-                />
-              </label>
-            </div>
-          )}
-          {page === "历史记录" && (
-            <div className="settings-card">
-              <label className="setting-field">
-                <span>{t("最多保存记录")}</span>
-                <input
-                  type="number"
-                  min={20}
-                  max={2000}
-                  value={settings.history_limit}
-                  onChange={(event) =>
-                    setSettings({
-                      ...settings,
-                      history_limit: Math.max(
-                        20,
-                        Math.min(2000, Number(event.target.value) || 200),
-                      ),
-                    })
-                  }
-                />
-              </label>
-              <p className="field-help">
-                {t("范围为 20–2000 条，降低上限后会删除最旧记录。")}
-              </p>
-            </div>
-          )}
-          {page === "自定义模型与 API" && (
-            <APISettings
-              profiles={profiles}
-              selected={selected}
-              selectedId={selectedId}
-              setSelectedId={setSelectedId}
-              apiEnabled={apiEnabled}
-              setApiEnabled={setApiEnabled}
-              models={models}
-              busy={busy}
-              patchProfile={patchProfile}
-              fetchModels={fetchModels}
-              testProfile={testProfile}
-              addProfile={addProfile}
-              removeProfile={() => {
-                if (!selected) return;
-                setProfiles((items) =>
-                  items.filter((profile) => profile.id !== selected.id),
-                );
-                setSelectedId(
-                  profiles.find((profile) => profile.id !== selected.id)?.id ||
-                    "",
-                );
-              }}
-              setActiveId={setActiveId}
-              activeId={activeId}
-              language={language}
-            />
-          )}
-        </div>
-        <footer className="settings-footer">
-          <span className="error-text">{error}</span>
-          <span className="toolbar-spacer" />
-          {feedback && (
-            <span className="saved-hint">
-              <Check size={14} />
-              {feedback}
-            </span>
-          )}
-          <button
-            className="toolbar-button primary"
-            disabled={
-              page === "自定义模型与 API"
-                ? !profilesDirty
-                : !currentSettingsDirty || Boolean(hotkeyError)
-            }
-            onClick={() =>
-              void (page === "自定义模型与 API"
-                ? saveProfiles()
-                : saveSettings())
-            }
-          >
-            {t("保存")}
-          </button>
-        </footer>
-      </section>
-      {confirmDiscard && (
-        <div className="settings-confirm-backdrop" role="presentation">
-          <div
-            className="settings-confirm"
-            role="alertdialog"
-            aria-labelledby="discard-title"
-            aria-describedby="discard-copy"
-          >
-            <h2 id="discard-title">{t("放弃未保存的更改？")}</h2>
-            <p id="discard-copy">
-              {t("设置中还有未保存的修改，关闭后这些修改将丢失。")}
-            </p>
-            <div className="settings-confirm-actions">
-              <button
-                className="secondary-button"
-                onClick={() => setConfirmDiscard(false)}
-              >
-                {t("取消")}
-              </button>
-              <button
-                className="toolbar-button primary"
-                onClick={discardAndClose}
-              >
-                {t("放弃更改")}
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
-    </main>
-  );
-}
-
-function Toggle({
-  checked,
-  onChange,
-  title,
-  description,
-}: {
-  checked: boolean;
-  onChange: (value: boolean) => void;
-  title: string;
-  description: string;
-}) {
-  return (
-    <label className="toggle-row">
-      <input
-        type="checkbox"
-        checked={checked}
-        onChange={(event) => onChange(event.target.checked)}
-      />
-      <span>
-        <strong>{title}</strong>
-        <small>{description}</small>
-      </span>
-    </label>
-  );
-}
-
-function APISettings({
-  profiles,
-  selected,
-  selectedId,
-  setSelectedId,
-  apiEnabled,
-  setApiEnabled,
-  models,
-  busy,
-  patchProfile,
-  fetchModels,
-  testProfile,
-  addProfile,
-  removeProfile,
-  activeId,
-  setActiveId,
-  language,
-}: {
-  profiles: Profile[];
-  selected?: Profile;
-  selectedId: string;
-  setSelectedId: (id: string) => void;
-  apiEnabled: boolean;
-  setApiEnabled: (value: boolean) => void;
-  models: string[];
-  busy: boolean;
-  patchProfile: (patch: Partial<Profile>) => void;
-  fetchModels: () => Promise<void>;
-  testProfile: () => Promise<void>;
-  addProfile: () => void;
-  removeProfile: () => void;
-  activeId: string;
-  setActiveId: (id: string) => void;
-  language: AppLanguage;
-}) {
-  const t = (text: string, values?: Record<string, string | number>) =>
-    translate(language, text, values);
-  return (
-    <div className="api-settings-shell">
-      <div className="api-master-card">
-        <Toggle
-          checked={apiEnabled}
-          onChange={setApiEnabled}
-          title={t("启用 API 重识别")}
-          description={t("只有主动点击主窗口的 API 重识别按钮时才会上传当前图片。")}
-        />
-      </div>
-      <div className="api-workspace">
-        <aside className="profile-list">
-          <div className="profile-list-heading">
-            <strong>{t("配置")}</strong>
-            <span>{profiles.length}</span>
-          </div>
-          <div className="profile-list-scroll">
-            {profiles.map((profile) => (
-              <button
-                className={
-                  selectedId === profile.id
-                    ? "profile-list-item selected"
-                    : "profile-list-item"
-                }
-                key={profile.id}
-                onClick={() => setSelectedId(profile.id)}
-              >
-                <span>{profile.name || t("未命名配置")}</span>
-                <small>
-                  {profile.provider_type === "mathpix"
-                    ? "Mathpix"
-                    : "OpenAI-compatible"}{" "}
-                  · {profile.enabled ? t("启用") : t("停用")}
-                </small>
-              </button>
-            ))}
-          </div>
-          <button className="secondary-button add-profile" onClick={addProfile}>
-            {t("＋ 新增配置")}
-          </button>
-        </aside>
-        <div className="profile-form">
-          {selected ? (
-            <>
-              <div className="profile-form-heading">
-                <div>
-                  <strong>{selected.name || t("未命名配置")}</strong>
-                  <small>
-                    {selected.provider_type === "mathpix"
-                      ? "Mathpix"
-                      : "OpenAI-compatible"}
-                  </small>
-                </div>
-                <label className="switch-field">
-                  <input
-                    type="checkbox"
-                    checked={selected.enabled}
-                    onChange={(event) =>
-                      patchProfile({ enabled: event.target.checked })
-                    }
-                  />
-                  <span>{t("启用此配置")}</span>
-                </label>
-              </div>
-              <section className="form-section">
-                <h3>{t("连接")}</h3>
-                <div className="profile-form-grid">
-                  <label className="setting-field">
-                    <span>{t("配置名称")}</span>
-                    <input
-                      value={selected.name}
-                      onChange={(event) =>
-                        patchProfile({ name: event.target.value })
-                      }
-                    />
-                  </label>
-                  <label className="setting-field">
-                    <span>{t("服务类型")}</span>
-                    <select
-                      value={selected.provider_type}
-                      onChange={(event) =>
-                        patchProfile({ provider_type: event.target.value })
-                      }
-                    >
-                      <option value="openai_compatible">
-                        OpenAI-compatible
-                      </option>
-                      <option value="mathpix">Mathpix</option>
-                    </select>
-                  </label>
-                  <label className="setting-field full-row">
-                    <span>Base URL</span>
-                    <input
-                      value={selected.base_url || ""}
-                      onChange={(event) =>
-                        patchProfile({ base_url: event.target.value })
-                      }
-                    />
-                  </label>
-                </div>
-              </section>
-              {selected.provider_type === "openai_compatible" ? (
-                <section className="form-section">
-                  <h3>{t("模型与凭据")}</h3>
-                  <div className="profile-form-grid">
-                    <label className="setting-field full-row">
-                      <span>{t("模型 ID")}</span>
-                      <div className="model-row">
-                        <input
-                          list="formulaocr-models"
-                          value={selected.model || ""}
-                          onChange={(event) =>
-                            patchProfile({ model: event.target.value })
-                          }
-                        />
-                        <datalist id="formulaocr-models">
-                          {models.map((model) => (
-                            <option key={model} value={model} />
-                          ))}
-                        </datalist>
-                        <button
-                          className="secondary-button compact-button"
-                          disabled={busy}
-                          onClick={() => void fetchModels()}
-                        >
-                          {busy ? t("获取中…") : t("获取模型")}
-                        </button>
-                      </div>
-                    </label>
-                    <label className="setting-field full-row">
-                      <span>
-                        API Key{" "}
-                        <small>{t("留空将保留 Keychain 中已保存的密钥")}</small>
-                      </span>
-                      <input
-                        type="password"
-                        placeholder={t("Keychain 中已保存")}
-                        value={selected.api_key || ""}
-                        onChange={(event) =>
-                          patchProfile({ api_key: event.target.value })
-                        }
-                      />
-                    </label>
-                    <label className="setting-field full-row">
-                      <span>
-                        {t("高级提示词")} <small>{t("留空使用内置公式转录提示")}</small>
-                      </span>
-                      <textarea
-                        value={selected.prompt_override || ""}
-                        onChange={(event) =>
-                          patchProfile({ prompt_override: event.target.value })
-                        }
-                        placeholder={t("使用内置公式转录提示")}
-                      />
-                    </label>
-                  </div>
-                </section>
-              ) : (
-                <section className="form-section">
-                  <h3>{t("Mathpix 凭据")}</h3>
-                  <div className="profile-form-grid">
-                    <label className="setting-field">
-                      <span>App ID</span>
-                      <input
-                        value={selected.app_id || ""}
-                        onChange={(event) =>
-                          patchProfile({ app_id: event.target.value })
-                        }
-                      />
-                    </label>
-                    <label className="setting-field">
-                      <span>
-                        App Key <small>{t("留空保留已保存密钥")}</small>
-                      </span>
-                      <input
-                        type="password"
-                        placeholder={t("Keychain 中已保存")}
-                        value={selected.app_key || ""}
-                        onChange={(event) =>
-                          patchProfile({ app_key: event.target.value })
-                        }
-                      />
-                    </label>
-                  </div>
-                </section>
-              )}
-              <section className="form-section compact-section">
-                <div className="timeout-row">
-                  <label className="inline-field">
-                    <span>{t("请求超时")}</span>
-                    <input
-                      type="number"
-                      min={5}
-                      max={120}
-                      value={selected.timeout_s || 45}
-                      onChange={(event) =>
-                        patchProfile({
-                          timeout_s: Math.max(
-                            5,
-                            Math.min(120, Number(event.target.value) || 45),
-                          ),
-                        })
-                      }
-                    />
-                    <span>{t("秒")}</span>
-                  </label>
-                  <span className="field-help">{t("范围 5–120 秒")}</span>
-                </div>
-              </section>
-              <div className="profile-actions">
-                <button className="text-danger" onClick={removeProfile}>
-                  <Trash2 size={16} />
-                  {t("删除配置")}
-                </button>
-                <span className="toolbar-spacer" />
-                <button
-                  className="secondary-button"
-                  onClick={() => void testProfile()}
-                  disabled={busy}
-                >
-                  <RefreshCw size={16} />
-                  {busy ? t("测试中…") : t("测试配置")}
-                </button>
-                <button
-                  className="secondary-button"
-                  onClick={() => setActiveId(selected.id)}
-                  disabled={activeId === selected.id}
-                >
-                  {activeId === selected.id ? t("当前配置") : t("设为当前")}
-                </button>
-              </div>
-            </>
-          ) : (
-            <div className="empty-state">{t("请选择或新增一个 API 配置")}</div>
-          )}
-        </div>
-      </div>
-    </div>
-  );
-}
-
 export function MainApp() {
   const [drawer, setDrawer] = useState(false);
   const [settingsFallback, setSettingsFallback] = useState(false);
   const [settings, setSettings] = useState<Settings>(defaults);
+  const [layoutReady, setLayoutReady] = useState(false);
+  const initialDrawer = useRef(localStorage.getItem("formulaocr.layout.drawerOpen") === "1");
+  const geometryTimer = useRef<ReturnType<typeof setTimeout>>();
+
   const language = normalizeLanguage(settings.language);
   const t = useCallback(
     (text: string, values?: Record<string, string | number>) =>
@@ -1216,6 +233,8 @@ export function MainApp() {
   const [apiOriginal, setApiOriginal] = useState("");
   const [localFormatted, setLocalFormatted] = useState("");
   const [apiFormatted, setApiFormatted] = useState("");
+  const [apiResultName, setApiResultName] = useState("");
+  const [profileMenu, setProfileMenu] = useState(false);
   const [mode, setMode] = useState<RecognitionMode>("chemistry");
   const [source, setSource] = useState<Source>("local");
   const [stacks, setStacks] = useState<
@@ -1223,27 +242,20 @@ export function MainApp() {
   >({ local: { undo: [], redo: [] }, api: { undo: [], redo: [] } });
   const [status, setStatus] = useState("正在后台准备离线模型…");
   const [busy, setBusy] = useState(false);
-  const [layout, setLayout] = useState<Layout>(() => {
-    try {
-      const value = JSON.parse(
-        localStorage.getItem("formulaocr.layout.v2") || "{}",
-      );
-      return {
-        image: value.image || 42,
-        result: value.result || 50,
-        drawerWidth: value.drawerWidth || 320,
-      };
-    } catch {
-      return { image: 42, result: 50, drawerWidth: 320 };
-    }
-  });
+  const [layout, setLayout] = useState<Layout>(() => readLayout(localStorage.getItem("formulaocr.layout.v2")));
   const [reload, setReload] = useState(0);
   const fileInput = useRef<HTMLInputElement>(null);
   const imageUrlRef = useRef<string | null>(null);
   const imageIdRef = useRef<string | null>(null);
   const requestId = useRef(0);
   const languageRef = useRef<AppLanguage>(language);
-  const draftTimer = useRef<number | null>(null);
+  const draftQueue = useRef<DraftQueue | null>(null);
+  if (!draftQueue.current) draftQueue.current = new DraftQueue(
+    (draft) => callSidecar("history.updateDraft", draft),
+    (error) => setStatus(translate(languageRef.current, "历史保存失败：{error}", { error: localizeError(languageRef.current, error) })),
+  );
+  const bootstrapped = useRef(false);
+  const hotkeyLoaded = useRef(false);
   const latexRef = useRef("");
   const editGroup = useRef<{ source: Source; lastAt: number }>({
     source: "local",
@@ -1269,9 +281,24 @@ export function MainApp() {
           language: normalizeLanguage(value.language),
         };
         setSettings(normalized);
-        void invoke("set_global_hotkey", {
-          shortcut: value.hotkey || "",
-        }).catch(() => undefined);
+        languageRef.current = normalized.language;
+        if (!bootstrapped.current) {
+          bootstrapped.current = true;
+          setMode(normalized.default_recognition_mode);
+          if (normalized.layout_restore_mode === "optimized_default") {
+            setLayout({ ...DEFAULT_LAYOUT }); setDrawer(false);
+            void invoke("restore_main_geometry", { geometry: {} }).catch(() => undefined);
+          } else {
+            if (normalized.layout_restore_mode === "restore_full_state") setDrawer(initialDrawer.current);
+            try { void invoke("restore_main_geometry", { geometry: JSON.parse(localStorage.getItem("formulaocr.geometry.v1") || "{}") }).catch(() => undefined); } catch {}
+          }
+          setLayoutReady(true);
+        }
+        if (!hotkeyLoaded.current) {
+          hotkeyLoaded.current = true;
+          void invoke("set_global_hotkey", { shortcut: normalized.hotkey }).catch((error) =>
+            setStatus(translate(normalized.language, "快捷键注册失败：{error}", { error: localizeError(normalized.language, error) })));
+        }
         void invoke("set_menu_language", {
           language: normalized.language,
         }).catch(() => undefined);
@@ -1296,7 +323,6 @@ export function MainApp() {
     document.documentElement.lang = language;
     document.title = "FormulaOCR";
     languageRef.current = language;
-    setStatus(translate(language, "离线识别"));
   }, [language]);
   useEffect(() => {
     let active = true;
@@ -1322,47 +348,43 @@ export function MainApp() {
       openSettings(page, language, () => setSettingsFallback(true)),
     [language],
   );
+  useTauriEvent<string>("formulaocr://open-settings", (event) => showSettings(event.payload || "常规"));
+  useTauriEvent("formulaocr://settings-updated", () => setReload((value) => value + 1));
+  const saveGeometry = async () => {
+    try { localStorage.setItem("formulaocr.geometry.v1", JSON.stringify(await invoke("main_geometry"))); } catch {}
+  };
+  useTauriEvent("formulaocr://window-close-requested", () => {
+    void draftQueue.current!.flush(); void saveGeometry();
+    void invoke("set_activation_policy", { accessory: settings.hide_dock_on_close });
+  });
+  const finishQuit = async () => {
+    ++requestId.current;
+    await draftQueue.current!.flush();
+    await saveGeometry();
+    await invoke("complete_quit");
+  };
+  useTauriEvent("formulaocr://quit-requested", () => { void finishQuit(); });
+  useTauriEvent("formulaocr://flush-before-quit", () => { void finishQuit(); });
+  useTauriEvent("formulaocr://reset-layout", () => {
+    setLayout({ ...DEFAULT_LAYOUT }); setDrawer(false);
+    localStorage.removeItem("formulaocr.geometry.v1");
+    void invoke("restore_main_geometry", { geometry: {} });
+  });
   useEffect(() => {
-    let stop: (() => void) | undefined;
-    void listen<string>("formulaocr://open-settings", (event) =>
-      showSettings(event.payload || "常规"),
-    ).then((unlisten) => {
-      stop = unlisten;
-    });
-    return () => stop?.();
-  }, [showSettings]);
+    if (!layoutReady) return;
+    localStorage.setItem("formulaocr.layout.v2", JSON.stringify({ ...layout, version: 3 }));
+    localStorage.setItem("formulaocr.layout.drawerOpen", drawer ? "1" : "0");
+  }, [layout, drawer, layoutReady]);
   useEffect(() => {
-    let stop: (() => void) | undefined;
-    void listen("formulaocr://settings-updated", () =>
-      setReload((value) => value + 1),
-    ).then((unlisten) => {
-      stop = unlisten;
-    });
-    return () => stop?.();
-  }, []);
-  useEffect(() => {
-    let stop: (() => void) | undefined;
-    void listen("formulaocr://window-close-requested", () => {
-      void invoke("set_activation_policy", {
-        accessory: settings.hide_dock_on_close,
-      });
-    }).then((unlisten) => {
-      stop = unlisten;
-    });
-    return () => stop?.();
-  }, [settings.hide_dock_on_close]);
-  useEffect(() => {
-    localStorage.setItem("formulaocr.layout.v2", JSON.stringify(layout));
-    if (settings.layout_restore_mode === "restore_full_state")
-      localStorage.setItem("formulaocr.layout.drawerOpen", drawer ? "1" : "0");
-  }, [layout, drawer, settings.layout_restore_mode]);
-  useEffect(() => {
-    if (settings.layout_restore_mode === "optimized_default") {
-      setLayout({ image: 42, result: 50, drawerWidth: 320 });
-      setDrawer(false);
-    } else if (settings.layout_restore_mode === "restore_full_state")
-      setDrawer(localStorage.getItem("formulaocr.layout.drawerOpen") === "1");
-  }, [settings.layout_restore_mode]);
+    if (!layoutReady) return;
+    let disposed = false;
+    const stops: (() => void)[] = [];
+    const save = () => { clearTimeout(geometryTimer.current); geometryTimer.current = setTimeout(() => void saveGeometry(), 250); };
+    for (const subscribe of [getCurrentWindow().onResized(save), getCurrentWindow().onMoved(save)]) {
+      void subscribe.then((stop) => { if (disposed) stop(); else stops.push(stop); });
+    }
+    return () => { disposed = true; stops.forEach((stop) => stop()); clearTimeout(geometryTimer.current); };
+  }, [layoutReady]);
   useEffect(() => {
     if (!drawer) return;
     void callSidecar<{ records: RecordItem[] }>("history.list")
@@ -1384,6 +406,7 @@ export function MainApp() {
   );
 
   const openImage = async (blob: Blob, token: number, stagedPath?: string) => {
+    const flushed = draftQueue.current!.flush();
     const previousId = imageIdRef.current;
     imageIdRef.current = null;
     setImageId(null);
@@ -1404,6 +427,7 @@ export function MainApp() {
     setApiOriginal("");
     setLocalFormatted("");
     setApiFormatted("");
+    setApiResultName("");
     setSource("local");
     setHistoryId(null);
     setStacks({ local: { undo: [], redo: [] }, api: { undo: [], redo: [] } });
@@ -1427,6 +451,8 @@ export function MainApp() {
       // WebKit may throttle animation frames in that state.
       window.setTimeout(finish, 32);
     });
+    await flushed;
+    if (token !== requestId.current) return null;
     const path =
       stagedPath ||
       (await invoke<string>("stage_image_bytes", {
@@ -1446,56 +472,10 @@ export function MainApp() {
     return opened.image_id;
   };
   const recognize = useCallback(
-    async (blob: Blob) => {
+    async (blob: Blob, stagedPath?: string) => {
       const token = ++requestId.current;
       setBusy(true);
       setStatus(t("正在载入图片…"));
-      try {
-        const id = await openImage(blob, token);
-        if (!id) return;
-        const result = await callSidecar<{
-          formatted_latex?: string;
-          raw_latex?: string;
-          elapsed_ms?: number;
-          history_id?: string;
-        }>("ocr.recognize", { image_id: id, mode });
-        if (token !== requestId.current) return;
-        const value = result.formatted_latex || result.raw_latex || "";
-        const raw = result.raw_latex || value;
-        setLatex(value);
-        setLocalLatex(value);
-        setApiLatex("");
-        setLocalOriginal(raw);
-        setLocalFormatted(value);
-        setApiOriginal("");
-        setApiFormatted("");
-        setSource("local");
-        setHistoryId(result.history_id || null);
-        setStacks({
-          local: { undo: [], redo: [] },
-          api: { undo: [], redo: [] },
-        });
-        latexRef.current = value;
-        resetEditGroup("local");
-        setStatus(t("识别完成{time}", {
-          time: result.elapsed_ms ? ` · ${Math.round(result.elapsed_ms)} ms` : "",
-        }));
-        if (settings.auto_copy && value) await copyWord(value);
-      } catch (error) {
-        if (token === requestId.current)
-          setStatus(t("识别失败：{error}", {
-            error: localizeError(language, error),
-          }));
-      } finally {
-        if (token === requestId.current) setBusy(false);
-      }
-    },
-    [settings.auto_copy, mode, t],
-  );
-  const recognizeStaged = useCallback(
-    async (blob: Blob, stagedPath: string) => {
-      const token = ++requestId.current;
-      setBusy(true);
       try {
         const id = await openImage(blob, token, stagedPath);
         if (!id) return;
@@ -1504,15 +484,16 @@ export function MainApp() {
           raw_latex?: string;
           elapsed_ms?: number;
           history_id?: string;
+          history_error?: string;
         }>("ocr.recognize", { image_id: id, mode });
         if (token !== requestId.current) return;
         const value = result.formatted_latex || result.raw_latex || "";
         const raw = result.raw_latex || value;
         setLatex(value);
         setLocalLatex(value);
+        setApiLatex("");
         setLocalOriginal(raw);
         setLocalFormatted(value);
-        setApiLatex("");
         setApiOriginal("");
         setApiFormatted("");
         setSource("local");
@@ -1526,7 +507,9 @@ export function MainApp() {
         setStatus(t("识别完成{time}", {
           time: result.elapsed_ms ? ` · ${Math.round(result.elapsed_ms)} ms` : "",
         }));
-        if (settings.auto_copy && value) await copyWord(value);
+        if (drawer) void callSidecar<{ records: RecordItem[] }>("history.list").then((value) => setRecords(value.records));
+        if (result.history_error) setStatus(t("历史保存失败：{error}", { error: result.history_error }));
+        if (settings.auto_copy && value) await copyWord(value, token, true);
       } catch (error) {
         if (token === requestId.current)
           setStatus(t("识别失败：{error}", {
@@ -1556,22 +539,15 @@ export function MainApp() {
     nextSource: Source = source,
     nextHistoryId: string | null = historyId,
   ) => {
-    if (draftTimer.current !== null) window.clearTimeout(draftTimer.current);
     if (!nextHistoryId) return;
-    draftTimer.current = window.setTimeout(() => {
-      draftTimer.current = null;
-      void callSidecar("history.updateDraft", {
-        id: nextHistoryId,
-        source: nextSource,
-        latex: value,
-      });
-    }, 500);
+    draftQueue.current!.schedule({ id: nextHistoryId, source: nextSource, latex: value });
   };
   const updateLatex = (value: string) => {
     const now = performance.now();
     const previous = latexRef.current;
     if (value === previous) return;
     const startsNewGroup =
+      editGroup.current.lastAt === 0 ||
       editGroup.current.source !== source ||
       now - editGroup.current.lastAt > 600;
     setStacks((state) => ({
@@ -1590,7 +566,9 @@ export function MainApp() {
     else setApiLatex(value);
     scheduleDraftSave(value);
   };
-  const copyWord = async (value = latex) => {
+  const copyWord = async (value = latex, token = requestId.current, automatic = false) => {
+    const isCurrent = () => token === requestId.current && (!automatic || latexRef.current === value);
+    if (!isCurrent()) return;
     if (!value.trim()) return setStatus(t("没有可复制的 LaTeX"));
     try {
       const mathml = (
@@ -1598,10 +576,13 @@ export function MainApp() {
           latex: value,
         })
       ).mathml;
+      // Conversion is asynchronous. A newer image or edit must not have its
+      // clipboard replaced by an automatic copy of the previous result.
+      if (!isCurrent()) return;
       await invoke("native_copy_word", { latex: value, mathml });
-      setStatus(t("已复制 Word 格式"));
+      if (isCurrent()) setStatus(t("已复制 Word 格式"));
     } catch (error) {
-      setStatus(t("复制 Word 失败：{error}", {
+      if (isCurrent()) setStatus(t("复制 Word 失败：{error}", {
         error: localizeError(language, error),
       }));
     }
@@ -1617,7 +598,7 @@ export function MainApp() {
       const blob = await response.blob();
       // recognize() publishes the Blob URL first; the now-asynchronous Rust
       // bridge lets WebKit paint it while image.open and ONNX inference run.
-      await recognizeStaged(blob, path);
+      await recognize(blob, path);
     } catch (error) {
       setStatus(t("截图失败：{error}", {
         error: localizeError(language, error),
@@ -1625,28 +606,23 @@ export function MainApp() {
     } finally {
       captureInProgress.current = false;
     }
-  }, [busy, recognizeStaged, t]);
-  useEffect(() => {
-    let stop: (() => void) | undefined;
-    void listen(
-      "formulaocr://screenshot-requested",
-      () => void screenshot(),
-    ).then((unlisten) => {
-      stop = unlisten;
-    });
-    return () => stop?.();
-  }, [screenshot]);
+  }, [busy, recognize, t]);
+  useTauriEvent("formulaocr://screenshot-requested", () => void screenshot());
   const apiRecognize = async () => {
     if (!imageId || !activeId) return setStatus(t("没有当前图片或可用 API 配置"));
     setBusy(true);
     setStatus(t("正在进行 API 重识别…"));
+    const token = requestId.current;
+    await draftQueue.current!.flush();
     try {
       const result = await callSidecar<{
         raw_latex: string;
         formatted_latex?: string;
         profile_name: string;
         history_id?: string;
+        history_error?: string;
       }>("api.recognize", { image_id: imageId, profile_id: activeId, mode });
+      if (token !== requestId.current) return;
       const value = result.formatted_latex || result.raw_latex;
       setStacks((state) => ({
         ...state,
@@ -1658,74 +634,69 @@ export function MainApp() {
       setApiLatex(value);
       setApiOriginal(result.raw_latex);
       setApiFormatted(value);
+      setApiResultName(result.profile_name);
       setSource("api");
       latexRef.current = value;
       resetEditGroup("api");
       if (result.history_id) setHistoryId(result.history_id);
       setStatus(t("API 完成 · {name}", { name: result.profile_name }));
-      if (settings.auto_copy) await copyWord(value);
+      if (result.history_error) setStatus(t("历史保存失败：{error}", { error: result.history_error }));
+      if (drawer) void callSidecar<{ records: RecordItem[] }>("history.list").then((value) => setRecords(value.records));
+      if (settings.auto_copy) await copyWord(value, token, true);
     } catch (error) {
-      setStatus(t("API 识别失败：{error}", {
+      if (token === requestId.current) setStatus(t("API 识别失败：{error}", {
         error: localizeError(language, error),
       }));
     } finally {
-      setBusy(false);
+      if (token === requestId.current) setBusy(false);
     }
   };
   const restore = async (id: string) => {
+    const token = ++requestId.current;
+    setBusy(true);
+    await draftQueue.current!.flush();
     try {
-      const [record, image] = await Promise.all([
-        callSidecar<RecordItem>("history.get", { id }),
-        callSidecar<{ png_base64: string }>("history.image", { id }),
-      ]);
-      if (!record) throw new Error(t("记录不存在"));
-      const blob = pngBase64ToBlob(image.png_base64);
-      const token = ++requestId.current;
-      await openImage(blob, token);
+      const opened = await callSidecar<{ record: RecordItem; image_id: string; png_base64: string }>("history.open", { id });
+      if (token !== requestId.current) {
+        void callSidecar("image.release", { image_id: opened.image_id });
+        return;
+      }
+      const record = opened.record;
+      if (imageIdRef.current) void callSidecar("image.release", { image_id: imageIdRef.current });
+      if (imageUrlRef.current) URL.revokeObjectURL(imageUrlRef.current);
+      const url = URL.createObjectURL(pngBase64ToBlob(opened.png_base64));
+      imageUrlRef.current = url;
+      imageIdRef.current = opened.image_id;
+      setImageUrl(url);
+      setImageId(opened.image_id);
       setHistoryId(id);
       setMode(record.recognition_mode || "chemistry");
-      setLocalLatex(record.local_draft_latex || "");
-      setLocalOriginal(
-        record.local_raw_latex || record.local_draft_latex || "",
-      );
-      setLocalFormatted(
-        record.local_formatted_latex || record.local_draft_latex || "",
-      );
-      setApiLatex(record.api_draft_latex || "");
-      setApiOriginal(record.api_raw_latex || record.api_draft_latex || "");
-      setApiFormatted(
-        record.api_formatted_latex || record.api_draft_latex || "",
-      );
-      const next =
-        record.active_source === "api" && record.api_draft_latex
-          ? "api"
-          : "local";
+      setLocalLatex(record.local_draft_latex ?? "");
+      setLocalOriginal(record.local_raw_latex);
+      setLocalFormatted(record.local_formatted_latex ?? record.local_draft_latex);
+      setApiLatex(record.api_draft_latex ?? "");
+      setApiOriginal(record.api_raw_latex ?? "");
+      setApiFormatted(record.api_formatted_latex ?? record.api_draft_latex ?? "");
+      setApiResultName(record.api_profile_name ?? "");
+      const next: Source = record.active_source === "api" && record.has_api ? "api" : "local";
+      const draft = (next === "api" ? record.api_draft_latex : record.local_draft_latex) ?? "";
       setSource(next);
-      setLatex(
-        next === "api"
-          ? record.api_draft_latex || ""
-          : record.local_draft_latex || "",
-      );
+      setLatex(draft);
       setStacks({ local: { undo: [], redo: [] }, api: { undo: [], redo: [] } });
-      latexRef.current =
-        next === "api"
-          ? record.api_draft_latex || ""
-          : record.local_draft_latex || "";
+      latexRef.current = draft;
       resetEditGroup(next);
       setStatus(t("已恢复历史记录"));
     } catch (error) {
-      setStatus(t("历史记录读取失败：{error}", {
-        error: localizeError(language, error),
-      }));
+      if (token === requestId.current) setStatus(t("历史记录读取失败：{error}", { error: localizeError(language, error) }));
+    } finally {
+      if (token === requestId.current) setBusy(false);
     }
   };
   const switchMode = async (nextMode: RecognitionMode) => {
-    if (nextMode === mode) return;
-    const activeBaseline = source === "local" ? localFormatted : apiFormatted;
+    if (nextMode === mode || busy) return;
+    const token = requestId.current;
     if (
-      latex &&
-      activeBaseline &&
-      latex !== activeBaseline &&
+      ((localOriginal && localLatex !== localFormatted) || (apiOriginal && apiLatex !== apiFormatted)) &&
       !window.confirm(t("切换识别模式会重新排版当前结果，是否继续？"))
     )
       return;
@@ -1744,6 +715,7 @@ export function MainApp() {
             })
           : Promise.resolve({ formatted_latex: "" }),
       ]);
+      if (token !== requestId.current) return;
       setMode(nextMode);
       setLocalFormatted(local.formatted_latex);
       setApiFormatted(api.formatted_latex);
@@ -1756,8 +728,13 @@ export function MainApp() {
       latexRef.current =
         source === "local" ? local.formatted_latex : api.formatted_latex;
       resetEditGroup(source);
-      if (historyId)
-        void callSidecar("history.setMode", { id: historyId, mode: nextMode });
+      if (historyId) {
+        await draftQueue.current!.flush();
+        await callSidecar("history.setMode", { id: historyId, mode: nextMode });
+        if (localOriginal) draftQueue.current!.schedule({ id: historyId, source: "local", latex: local.formatted_latex, activate: source === "local" });
+        if (apiOriginal) draftQueue.current!.schedule({ id: historyId, source: "api", latex: api.formatted_latex, activate: source === "api" });
+        await draftQueue.current!.flush();
+      }
       setStatus(
         t(nextMode === "chemistry" ? "已切换为化学排版" : "已切换为数学排版"),
       );
@@ -1806,40 +783,45 @@ export function MainApp() {
     window.addEventListener("pointerup", stop);
   };
   const selectSource = (next: Source) => {
+    void draftQueue.current!.flush();
     const draft = next === "local" ? localLatex : apiLatex;
     setSource(next);
     setLatex(draft);
     latexRef.current = draft;
     resetEditGroup(next);
-    if (historyId)
-      void callSidecar("history.updateDraft", {
-        id: historyId,
-        source: next,
-        latex: draft,
-      }).catch(() => undefined);
+    scheduleDraftSave(draft, next);
   };
-  const deleteRecord = async (id: string) => {
-    const index = records.findIndex((item) => item.id === id);
-    await callSidecar("history.delete", { id });
-    const remaining = records.filter((item) => item.id !== id);
-    setRecords(remaining);
-    if (historyId !== id) return;
-    const neighbor =
-      remaining[Math.min(Math.max(index, 0), remaining.length - 1)];
-    if (neighbor) await restore(neighbor.id);
-    else {
-      setHistoryId(null);
-      setLatex("");
-      setLocalLatex("");
-      setApiLatex("");
-      setImageUrl(null);
-      setImageId(null);
-      setStacks({ local: { undo: [], redo: [] }, api: { undo: [], redo: [] } });
-      latexRef.current = "";
-      resetEditGroup("local");
+  const clearWorkspace = () => {
+    ++requestId.current;
+    if (imageIdRef.current) void callSidecar("image.release", { image_id: imageIdRef.current });
+    if (imageUrlRef.current) URL.revokeObjectURL(imageUrlRef.current);
+    imageIdRef.current = null;
+    imageUrlRef.current = null;
+    setHistoryId(null); setImageId(null); setImageUrl(null);
+    setLatex(""); setLocalLatex(""); setApiLatex("");
+    setLocalOriginal(""); setApiOriginal(""); setLocalFormatted(""); setApiFormatted(""); setApiResultName("");
+    setSource("local"); setBusy(false);
+    setStacks({ local: { undo: [], redo: [] }, api: { undo: [], redo: [] } });
+    latexRef.current = ""; resetEditGroup("local");
+  };
+  const deleteRecords = async (ids: string[], all = false) => {
+    await draftQueue.current!.flush();
+    try {
+      await callSidecar(all ? "history.deleteAll" : "history.deleteMany", { ids });
+      const removed = new Set(ids);
+      const remaining = all ? [] : records.filter((record) => !removed.has(record.id));
+      const index = records.findIndex((record) => record.id === historyId);
+      setRecords(remaining);
+      setSelectedRecords((selected) => selected.filter((id) => !removed.has(id) && !all));
+      if (all || (historyId && removed.has(historyId))) {
+        const neighbor = remaining[Math.min(Math.max(index, 0), remaining.length - 1)];
+        if (neighbor) await restore(neighbor.id);
+        else clearWorkspace();
+      }
       setStatus(t("当前历史记录已删除"));
-    }
+    } catch (error) { setStatus(localizeError(language, error)); }
   };
+  const deleteRecord = (id: string) => deleteRecords([id]);
   const undo = () => {
     const value = stacks[source].undo[stacks[source].undo.length - 1];
     if (value === undefined) return;
@@ -1874,6 +856,20 @@ export function MainApp() {
     else setApiLatex(value);
     scheduleDraftSave(value);
   };
+  useEffect(() => {
+    const onKey = (event: KeyboardEvent) => {
+      if (settingsFallback) return;
+      if (event.key === "Escape") { setDrawer(false); setProfileMenu(false); return; }
+      if (!(event.metaKey || event.ctrlKey)) return;
+      if (event.key === ",") { event.preventDefault(); showSettings(); return; }
+      if (event.key.toLowerCase() === "z" && !(event.target instanceof HTMLInputElement)) {
+        event.preventDefault(); event.stopPropagation();
+        if (event.shiftKey) redo(); else undo();
+      }
+    };
+    window.addEventListener("keydown", onKey, true);
+    return () => window.removeEventListener("keydown", onKey, true);
+  });
   return (
     <main className="app-shell">
       <header className="toolbar">
@@ -1908,15 +904,10 @@ export function MainApp() {
           disabled={busy}
           onClick={async () => {
             try {
-              const items = await navigator.clipboard.read();
-              const item = items.find((entry) =>
-                entry.types.some((type) => type.startsWith("image/")),
-              );
-              const type = item?.types.find((value) =>
-                value.startsWith("image/"),
-              );
-              if (item && type) void recognize(await item.getType(type));
-              else setStatus(t("剪贴板中没有图片"));
+              const path = await invoke<string>("native_paste_image");
+              const response = await fetch(convertFileSrc(path));
+              if (!response.ok) throw new Error(t("无法读取截图结果"));
+              await recognize(await response.blob(), path);
             } catch {
               setStatus(t("无法读取剪贴板图片，请使用 Command–V"));
             }
@@ -1935,12 +926,14 @@ export function MainApp() {
         </button>
         <div className="mode-selector" aria-label={t("识别模式")}>
           <button
+            disabled={busy}
             className={mode === "chemistry" ? "active" : ""}
             onClick={() => void switchMode("chemistry")}
           >
             {t("化学")}
           </button>
           <button
+            disabled={busy}
             className={mode === "math" ? "active" : ""}
             onClick={() => void switchMode("math")}
           >
@@ -1959,7 +952,10 @@ export function MainApp() {
             </button>
             <button
               className="profile-pill"
-              onClick={() => showSettings("自定义模型与 API")}
+              title={activeProfile?.name || t("当前 API 配置")}
+              aria-haspopup="menu"
+              aria-expanded={profileMenu}
+              onClick={() => setProfileMenu((open) => !open)}
             >
               <span className="profile-name">
                 {activeProfile?.name || t("当前 API 配置")}
@@ -1976,14 +972,23 @@ export function MainApp() {
           title={t("设置")}
           onClick={() => showSettings()}
         >
-          <Settings size={18} />
+          <SettingsIcon size={18} />
         </button>
       </header>
+      {profileMenu && <><div className="profile-menu-dismiss" onClick={() => setProfileMenu(false)} />
+        <div className="profile-menu" role="menu" aria-label={t("当前 API 配置")}>
+          {profiles.filter((profile) => profile.enabled).map((profile) => <button key={profile.id} role="menuitemradio" aria-checked={profile.id === activeId} onClick={() => {
+            setProfileMenu(false);
+            void callSidecar("profiles.activate", { id: profile.id }).then(() => { setActiveId(profile.id); void emit("formulaocr://settings-updated"); })
+              .catch((error) => setStatus(localizeError(language, error)));
+          }}>{profile.id === activeId && <Check size={15}/>}<span>{profile.name}</span></button>)}
+          <button role="menuitem" onClick={() => { setProfileMenu(false); showSettings("自定义模型与 API"); }}>{t("设置")}</button>
+        </div></>}
       <section
         className="workspace"
         ref={workspace}
         style={{
-          gridTemplateRows: `${layout.image}% 8px ${100 - layout.image}%`,
+          gridTemplateRows: `minmax(0, ${layout.image}fr) 8px minmax(0, ${100 - layout.image}fr)`,
         }}
       >
         <div className="image-card">
@@ -2005,7 +1010,7 @@ export function MainApp() {
         <section className="result-card" ref={resultPane}>
           <div className="result-toolbar">
             <strong>{t("识别结果")}</strong>
-            {localLatex && (
+            {localOriginal && (
               <button
                 className={
                   source === "local"
@@ -2017,7 +1022,7 @@ export function MainApp() {
                 {t("内置")}
               </button>
             )}
-            {apiLatex && (
+            {apiOriginal && (
               <button
                 className={
                   source === "api"
@@ -2026,7 +1031,7 @@ export function MainApp() {
                 }
                 onClick={() => selectSource("api")}
               >
-                {t("API · {name}", { name: activeProfile?.name || t("配置") })}
+                {t("API · {name}", { name: apiResultName || t("配置") })}
               </button>
             )}
             <button
@@ -2071,8 +1076,8 @@ export function MainApp() {
               className="secondary-button"
               disabled={!latex.trim()}
               onClick={() => {
-                void navigator.clipboard.writeText(latex);
-                setStatus(t("已复制 LaTeX"));
+                void invoke("native_copy_text", { text: latex }).then(() => setStatus(t("已复制 LaTeX")))
+                  .catch((error) => setStatus(localizeError(language, error)));
               }}
             >
               <Copy size={16} />
@@ -2082,7 +1087,7 @@ export function MainApp() {
           <div
             className="result-split"
             style={{
-              gridTemplateColumns: `${layout.result}% 8px ${100 - layout.result}%`,
+              gridTemplateColumns: `minmax(0, ${layout.result}fr) 8px minmax(0, ${100 - layout.result}fr)`,
             }}
           >
             <section className="editor-pane">
@@ -2108,10 +1113,11 @@ export function MainApp() {
             type="checkbox"
             checked={settings.auto_copy}
             onChange={(event) => {
-              const value = { ...settings, auto_copy: event.target.checked };
-              setSettings(value);
-              void callSidecar("settings.save", { values: value });
-              void emit("formulaocr://settings-updated");
+              const checked = event.target.checked;
+              void callSidecar<Settings>("settings.save", { values: { auto_copy: checked } }).then((value) => {
+                setSettings({ ...defaults, ...value });
+                void emit("formulaocr://settings-updated");
+              }).catch((error) => setStatus(localizeError(language, error)));
             }}
           />
           {t("识别完成后自动复制 Word 格式")}
@@ -2138,15 +1144,7 @@ export function MainApp() {
                       )
                     )
                       return;
-                    await callSidecar("history.deleteMany", {
-                      ids: selectedRecords,
-                    });
-                    setRecords((items) =>
-                      items.filter(
-                        (item) => !selectedRecords.includes(item.id),
-                      ),
-                    );
-                    setSelectedRecords([]);
+                    await deleteRecords(selectedRecords);
                   }}
                 >
                   {t("删除所选")}
@@ -2157,9 +1155,7 @@ export function MainApp() {
                   className="text-danger"
                   onClick={async () => {
                     if (!window.confirm(t("删除全部识别历史？"))) return;
-                    await callSidecar("history.deleteAll");
-                    setRecords([]);
-                    setSelectedRecords([]);
+                    await deleteRecords(records.map((record) => record.id), true);
                   }}
                 >
                   {t("全部删除")}
@@ -2176,7 +1172,7 @@ export function MainApp() {
             {records.length ? (
               <div className="history-list">
                 {records.map((record) => (
-                  <div className="history-item" key={record.id}>
+                  <div className={historyId === record.id ? "history-item current" : "history-item"} key={record.id} onContextMenu={(event) => { event.preventDefault(); if (window.confirm(t("删除此历史记录？"))) void deleteRecord(record.id); }}>
                     <input
                       type="checkbox"
                       checked={selectedRecords.includes(record.id)}

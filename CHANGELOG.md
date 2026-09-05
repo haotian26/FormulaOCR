@@ -2,6 +2,31 @@
 
 ## [Unreleased]
 
+## [0.4.1] - Unreleased candidate
+
+### 中文
+
+- 修复换图后的迟到 API 结果、首次编辑撤销、历史空草稿和 API 分支恢复。
+- 设置按页原子保存；快捷键只在保存后替换，失败时保留旧值。保存、获取模型和测试反馈分开。
+- 原生剪贴板支持 PNG/TIFF；透明图像使用白底，图片先显示再后台识别。
+- 修复多行 aligned 公式预览，增强无效公式提示和长公式滚动。
+- 改善中英文最小窗口、表单对齐、禁用状态、深色模式与历史抽屉。
+- 完善退出清理、后台快捷键与测试覆盖，生产依赖不再要求 PySide6。
+- 保留当前 L 模型与预处理；最低系统要求如实设为 macOS 14。
+
+### English
+
+- Fixed late API results, first-edit Undo, empty history drafts and restored API branches.
+- Added atomic per-page settings, save-time shortcut replacement with rollback,
+  and distinct Save/model-fetch/test feedback.
+- Added native PNG/TIFF paste, white compositing for transparent images and
+  image-first background recognition.
+- Fixed aligned formula preview and improved invalid-formula errors and scrolling.
+- Improved compact bilingual layouts, field alignment, disabled states and dark mode.
+- Hardened shutdown and background shortcuts; expanded regression tests.
+- Kept the existing model and preprocessing. The packaged runtime requires macOS 14;
+  PySide6 is now optional for the archived GUI only.
+
 ## [0.4.0] - 2026-08-24
 
 ### 中文

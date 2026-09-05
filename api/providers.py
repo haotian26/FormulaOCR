@@ -47,6 +47,8 @@ def validate_endpoint(url: str) -> str:
     if parsed.scheme not in {"http", "https"} or not parsed.netloc:
         raise RemoteProviderError("API 地址必须是完整的 http(s) URL")
     host = (parsed.hostname or "").lower()
+    if parsed.username or parsed.password or parsed.query or parsed.fragment:
+        raise RemoteProviderError("API 地址不能包含用户名、密码、查询参数或片段")
     if parsed.scheme == "http" and host not in {"localhost", "127.0.0.1", "::1"}:
         raise RemoteProviderError("远程 API 必须使用 HTTPS；HTTP 只允许本机地址")
     return cleaned

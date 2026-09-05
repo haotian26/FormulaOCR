@@ -6,7 +6,7 @@ PYTHON=${FORMULAOCR_PYTHON:-/private/tmp/formulaocr-build-venv/bin/python}
 FORMULAOCR_PYTHON="$PYTHON" "$ROOT/tools/build_tauri_sidecar.sh"
 
 cd "$ROOT"
-TAURI_TARGET_DIR=/private/tmp/formulaocr-tauri-target
+TAURI_TARGET_DIR=${CARGO_TARGET_DIR:-/private/tmp/formulaocr-tauri-target}
 export CARGO_TARGET_DIR="$TAURI_TARGET_DIR"
 export CARGO_BUILD_JOBS=1
 export PATH="/opt/homebrew/opt/rustup/bin:$PATH"

@@ -1,6 +1,6 @@
 [package]
 name = "formulaocr"
-version = "0.4.0"
+version = "0.4.1"
 description = "FormulaOCR native macOS shell"
 authors = ["FormulaOCR"]
 license = "MIT"
@@ -22,8 +22,8 @@ tauri-plugin-single-instance = "2"
 
 [target.'cfg(target_os = "macos")'.dependencies]
 objc2 = "0.6.4"
-objc2-app-kit = { version = "0.3.2", default-features = false, features = ["std", "objc2-core-foundation", "NSButton", "NSCell", "NSControl", "NSImage", "NSResponder", "NSStatusBarButton", "NSStatusItem", "NSView"] }
-objc2-foundation = { version = "0.3.2", default-features = false, features = ["std", "objc2-core-foundation", "NSString", "NSThread"] }
+objc2-app-kit = { version = "0.3.2", default-features = false, features = ["std", "objc2-core-foundation", "NSButton", "NSCell", "NSControl", "NSImage", "NSImageRep", "NSBitmapImageRep", "NSPasteboard", "NSResponder", "NSStatusBarButton", "NSStatusItem", "NSView"] }
+objc2-foundation = { version = "0.3.2", default-features = false, features = ["std", "objc2-core-foundation", "NSString", "NSThread", "NSData", "NSDictionary"] }
 
 [features]
 custom-protocol = ["tauri/custom-protocol"]

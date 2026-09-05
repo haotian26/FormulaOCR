@@ -37,7 +37,7 @@ FormulaOCR 是一个用来处理公式截图的小工具。你可以从论文、
 从 [Releases](https://github.com/haotian26/FormulaOCR/releases/latest)
 下载最新 DMG，打开后把 FormulaOCR 拖入“应用程序”文件夹。
 
-当前版本仅支持 Apple Silicon（`arm64`）。安装包经过 ad-hoc 签名，但尚未
+当前版本支持 macOS 14 及以上的 Apple Silicon（`arm64`）。安装包经过 ad-hoc 签名，但尚未
 进行 Apple 公证；第一次启动时，可能需要按住 Control 点击 App，再选择
 “打开”。截图 OCR 还需要在系统设置中授予屏幕录制权限。
 

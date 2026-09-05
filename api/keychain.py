@@ -33,8 +33,6 @@ class KeychainStore:
         self._module().set_password(self.service, account, json.dumps(value, ensure_ascii=False))
 
     def delete(self, account: str) -> None:
-        try:
-            self._module().delete_password(self.service, account)
-        except Exception:
-            # Deletion is idempotent when the account is already absent.
-            pass
+        module = self._module()
+        if module.get_password(self.service, account) is not None:
+            module.delete_password(self.service, account)

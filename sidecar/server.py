@@ -22,6 +22,7 @@ from pathlib import Path
 from typing import Any
 
 from gui.history import HistoryStore
+from .settings import SettingsStore, atomic_json
 
 
 def _json_value(value: Any) -> Any:
@@ -43,11 +44,14 @@ class Sidecar:
         self.engine = None
         self.images: dict[str, bytes] = {}
         self.image_records: dict[str, str] = {}
-        self.history = HistoryStore(root=self._history_root())
         self.data_root = self._data_root()
+        self.settings = SettingsStore(self.data_root / "settings.json")
+        self.history = HistoryStore(root=self._history_root(), limit=self.settings.get()["history_limit"])
         self.profile_store_path = self.data_root / "api_profiles.json"
-        self._engine_lock = threading.Lock()
+        self._engine_lock = threading.RLock()
         self._history_lock = threading.RLock()
+        self._profile_lock = threading.RLock()
+        self._closed = False
 
     @staticmethod
     def _data_root() -> Path:
@@ -60,16 +64,20 @@ class Sidecar:
         return Path(configured).expanduser() / "history" if configured else None
 
     def close(self) -> None:
+        if self._closed:
+            return
+        self._closed = True
         self.images.clear()
         self.image_records.clear()
         self.history.close()
 
     def _ensure_engine(self):
-        if self.engine is None:
-            from app.application import build_engine
+        with self._engine_lock:
+            if self.engine is None:
+                from app.application import build_engine
 
-            self.engine = build_engine()
-        return self.engine
+                self.engine = build_engine()
+            return self.engine
 
     @staticmethod
     def _history_payload(record) -> dict[str, Any]:
@@ -85,11 +93,11 @@ class Sidecar:
         payload = _json_value(record)
         mode = record.recognition_mode if record.recognition_mode in {"chemistry", "math"} else "chemistry"
         payload["local_formatted_latex"] = normalize_latex(record.local_raw_latex, mode=mode)
-        if not record.local_draft_latex:
+        if record.local_draft_latex is None:
             payload["local_draft_latex"] = payload["local_formatted_latex"]
         if record.api_raw_latex:
             payload["api_formatted_latex"] = normalize_latex(record.api_raw_latex, mode=mode)
-            if not record.api_draft_latex:
+            if record.api_draft_latex is None:
                 payload["api_draft_latex"] = payload["api_formatted_latex"]
         payload["has_api"] = record.has_api
         return payload
@@ -112,16 +120,14 @@ class Sidecar:
         if method == "image.open":
             raw = params.get("png_base64", "")
             image_id = str(params.get("image_id") or uuid.uuid4().hex)
-            self.images[image_id] = base64.b64decode(raw)
+            self.images[image_id] = self._validated_image(base64.b64decode(raw, validate=True))
             return {"image_id": image_id, "bytes": len(self.images[image_id])}
         if method == "image.openPath":
             path = self._validated_staged_path(str(params.get("path", "")))
             image_id = str(params.get("image_id") or uuid.uuid4().hex)
             try:
                 contents = path.read_bytes()
-                from PIL import Image
-                Image.open(io.BytesIO(contents)).verify()
-                self.images[image_id] = contents
+                self.images[image_id] = self._validated_image(contents)
             finally:
                 path.unlink(missing_ok=True)
             return {"image_id": image_id, "bytes": len(self.images[image_id])}
@@ -133,6 +139,8 @@ class Sidecar:
             mode = str(params.get("mode", "chemistry"))
             if mode not in {"chemistry", "math"}:
                 raise ValueError("mode must be chemistry or math")
+            image_id = str(params.get("image_id", ""))
+            image_bytes = self.images.get(image_id)
             image = self._image(params)
             engine = self._ensure_engine()
             started = time.perf_counter()
@@ -152,14 +160,15 @@ class Sidecar:
                     render_error = str(render_exc)
                 with self._history_lock:
                     record = self.history.create_local(
-                        self.images[str(params.get("image_id", ""))],
+                        image_bytes,
                         local_raw_latex=result.raw_latex,
                         local_formatted_latex=formatted,
                         local_draft_latex=formatted,
                         local_render_error=render_error,
                         recognition_mode=mode,
                     )
-                self.image_records[str(params.get("image_id", ""))] = record.id
+                if image_id in self.images:
+                    self.image_records[image_id] = record.id
                 payload["history_id"] = record.id
             except Exception as exc:
                 payload["history_error"] = str(exc)
@@ -172,33 +181,25 @@ class Sidecar:
             from converter.latex_to_mathml import latex_to_mathml
             return {"mathml": latex_to_mathml(str(params.get("latex", "")))}
         if method == "settings.get":
-            path = self.data_root / "settings.json"
-            if not path.is_file():
-                return {
-                    "auto_copy": False,
-                    "hide_dock_on_close": True,
-                    "hotkey": "ctrl+alt+cmd+o",
-                    "history_limit": 200,
-                    "layout_restore_mode": "remember_window_history_closed",
-                    "layout_version": 2,
-                    "default_recognition_mode": "chemistry",
-                    "language": "zh-CN",
-                }
-            return json.loads(path.read_text(encoding="utf-8"))
+            return self.settings.get()
         if method == "settings.save":
-            values = dict(params.get("values") or {})
-            self.data_root.mkdir(parents=True, exist_ok=True)
-            temporary = self.data_root / ".settings.json.tmp"
-            temporary.write_text(json.dumps(values, ensure_ascii=False, indent=2), encoding="utf-8")
-            temporary.replace(self.data_root / "settings.json")
-            return values
+            return self.settings.save(params.get("values") or {})
         if method == "profiles.list":
-            profiles, enabled, active_id = self._load_profiles()
+            profiles, enabled, active_id = self._load_profiles(with_secrets=False)
             return {"api_enabled": enabled, "active_profile_id": active_id, "profiles": [profile.public_dict() for profile in profiles]}
         if method == "profiles.save":
-            self._save_profiles(params)
-            profiles, enabled, active_id = self._load_profiles()
+            with self._profile_lock:
+                self._save_profiles(params)
+                profiles, enabled, active_id = self._load_profiles(with_secrets=False)
             return {"api_enabled": enabled, "active_profile_id": active_id, "profiles": [profile.public_dict() for profile in profiles]}
+        if method == "profiles.activate":
+            with self._profile_lock:
+                profiles, enabled, _ = self._load_profiles(with_secrets=False)
+                active_id = str(params.get("id", ""))
+                if not any(profile.id == active_id and profile.enabled for profile in profiles):
+                    raise ValueError("没有可用的 API 配置")
+                atomic_json(self.profile_store_path, {"api_enabled": enabled, "active_profile_id": active_id, "profiles": [p.public_dict() for p in profiles]})
+                return {"active_profile_id": active_id}
         if method == "api.listModels":
             from api.providers import provider_for_profile
             from api.config import APIProviderProfile
@@ -232,7 +233,11 @@ class Sidecar:
                 profile.app_id = str(draft.get("app_id") or (stored.app_id if stored else ""))
                 profile.app_key = str(draft.get("app_key") or (stored.app_key if stored else ""))
             if profile.provider_type == "mathpix":
-                return {"ok": True, "message": "Mathpix 将在实际 API 重识别时验证，不发送测试请求"}
+                from api.providers import validate_endpoint
+                validate_endpoint(profile.base_url)
+                if not profile.app_id.strip() or not profile.app_key.strip():
+                    raise ValueError("未配置 Mathpix App ID/App Key")
+                return {"ok": True, "message": "Mathpix 凭据格式已检查；服务端有效性需实际识别验证，本次未联网"}
             models = provider_for_profile(profile).list_models()
             return {"ok": True, "message": f"连接成功，获取到 {len(models)} 个模型", "models": list(dict.fromkeys(models))}
         if method == "api.recognize":
@@ -244,17 +249,20 @@ class Sidecar:
             profile = next((item for item in profiles if item.id == profile_id and item.enabled), None)
             if profile is None:
                 raise ValueError("没有可用的 API 配置")
-            result = provider_for_profile(profile).recognize(self.images[str(params.get("image_id", ""))])
-            payload = _json_value(result)
             mode = str(params.get("mode", "chemistry"))
             if mode not in {"chemistry", "math"}:
                 raise ValueError("mode must be chemistry or math")
+            image_id = str(params.get("image_id", ""))
+            image_bytes = self.images.get(image_id)
+            if image_bytes is None:
+                raise ValueError("image_id is missing or has been released")
+            record_id = self.image_records.get(image_id)
+            result = provider_for_profile(profile).recognize(image_bytes)
+            payload = _json_value(result)
             from ocr.postprocess import normalize_latex
             formatted = normalize_latex(result.raw_latex, mode=mode)
             payload["formatted_latex"] = formatted
             payload["mode"] = mode
-            image_id = str(params.get("image_id", ""))
-            record_id = self.image_records.get(image_id)
             if record_id:
                 try:
                     from converter.latex_to_mathml import latex_to_mathml
@@ -262,17 +270,29 @@ class Sidecar:
                     render_error = None
                 except Exception as render_exc:
                     render_error = str(render_exc)
-                updated = self.history.update_api(
-                    record_id,
-                    api_raw_latex=result.raw_latex,
-                    api_formatted_latex=formatted,
-                    api_draft_latex=formatted,
-                    api_profile_name=result.profile_name,
-                    api_model=result.model,
-                    api_render_error=render_error,
-                )
-                payload["history_id"] = record_id if updated else None
+                try:
+                    updated = self.history.update_api(
+                        record_id,
+                        api_raw_latex=result.raw_latex,
+                        api_formatted_latex=formatted,
+                        api_draft_latex=formatted,
+                        api_profile_name=result.profile_name,
+                        api_model=result.model,
+                        api_render_error=render_error,
+                    )
+                    payload["history_id"] = record_id if updated else None
+                except Exception as exc:
+                    payload["history_error"] = str(exc)
             return payload
+        if method == "history.open":
+            record = self.history.get(str(params.get("id", "")))
+            if record is None:
+                raise ValueError("history record not found")
+            image_id = uuid.uuid4().hex
+            contents = self._validated_image(Path(record.image_path).read_bytes())
+            self.images[image_id] = contents
+            self.image_records[image_id] = record.id
+            return {"record": self._history_payload(record), "image_id": image_id, "png_base64": base64.b64encode(contents).decode("ascii")}
         if method == "history.list":
             records = [self._history_payload(record) for record in self.history.list_records()]
             return {"records": records}
@@ -307,8 +327,10 @@ class Sidecar:
         if method == "history.updateDraft":
             record_id = str(params.get("id", ""))
             source = str(params.get("source", "local"))
-            self.history.update_draft(record_id, source, str(params.get("latex", "")))
-            self.history.set_active_source(record_id, source)
+            with self.history._lock:
+                self.history.update_draft(record_id, source, str(params.get("latex", "")))
+                if params.get("activate", True):
+                    self.history.set_active_source(record_id, source)
             return {"ok": True}
         if method == "history.setLimit":
             limit = self.history.set_limit(int(params.get("limit", 200)))
@@ -317,6 +339,23 @@ class Sidecar:
             self.history.set_recognition_mode(str(params.get("id", "")), str(params.get("mode", "chemistry")))
             return {"ok": True}
         raise ValueError(f"unknown method: {method}")
+
+    @staticmethod
+    def _validated_image(contents: bytes) -> bytes:
+        from PIL import Image, ImageOps
+        if not contents or len(contents) > 32 * 1024 * 1024:
+            raise ValueError("Image must be between 1 byte and 32 MB")
+        with Image.open(io.BytesIO(contents)) as source:
+            if source.width * source.height > 40_000_000:
+                raise ValueError("Image exceeds 40 megapixels")
+            image = ImageOps.exif_transpose(source)
+            # Transparent clipboard backgrounds must not become black ink.
+            rgba = image.convert("RGBA")
+            background = Image.new("RGBA", rgba.size, "white")
+            background.alpha_composite(rgba)
+            output = io.BytesIO()
+            background.convert("RGB").save(output, format="PNG")
+            return output.getvalue()
 
     def _image(self, params: dict[str, Any]) -> Any:
         image_id = str(params.get("image_id", ""))
@@ -341,7 +380,7 @@ class Sidecar:
             raise ValueError("staged image path is outside the approved directory")
         return path
 
-    def _load_profiles(self):
+    def _load_profiles(self, *, with_secrets=True):
         from api.config import APIProviderProfile
         values: list[dict[str, Any]] = []
         enabled = False
@@ -352,13 +391,16 @@ class Sidecar:
                 values = payload.get("profiles", []) if isinstance(payload, dict) else []
                 enabled = bool(payload.get("api_enabled", False)) if isinstance(payload, dict) else False
                 active_id = str(payload.get("active_profile_id", "")) if isinstance(payload, dict) else ""
-            except (OSError, json.JSONDecodeError):
-                pass
+            except (OSError, json.JSONDecodeError) as exc:
+                raise ValueError("Cannot read API profiles; the original file was preserved") from exc
         profiles = []
         for value in values:
             if not isinstance(value, dict):
                 continue
             profile = APIProviderProfile.from_public_dict(value)
+            if not with_secrets:
+                profiles.append(profile)
+                continue
             try:
                 from api.keychain import KeychainStore
                 service = os.environ.get("FORMULAOCR_KEYCHAIN_SERVICE", "FormulaOCR API Dev")
@@ -374,53 +416,68 @@ class Sidecar:
                 profile.api_key = str(secret.get("api_key", ""))
                 profile.app_id = str(secret.get("app_id", ""))
                 profile.app_key = str(secret.get("app_key", ""))
-            except Exception:
-                pass
+            except Exception as exc:
+                raise ValueError("Cannot read API credentials from Keychain") from exc
             profiles.append(profile)
         return profiles, enabled, active_id
 
     def _save_profiles(self, params: dict[str, Any]) -> None:
         from api.config import APIProviderProfile
-        previous_profiles, _, _ = self._load_profiles()
+        from api.keychain import KeychainStore
+        from api.providers import validate_endpoint
+        previous_profiles, _, _ = self._load_profiles(with_secrets=False)
         previous_ids = {profile.id for profile in previous_profiles}
         values = params.get("profiles", [])
         profiles = []
+        updates = {}
+        seen = set()
         for value in values:
             if not isinstance(value, dict):
-                continue
+                raise ValueError("API profile must be an object")
             profile = APIProviderProfile.from_public_dict(value)
-            # Empty form fields mean “keep the existing Keychain secret”.
-            try:
-                from api.keychain import KeychainStore
-                existing = KeychainStore(os.environ.get("FORMULAOCR_KEYCHAIN_SERVICE", "FormulaOCR API Dev")).get(profile.id) or {}
-            except Exception:
-                existing = {}
-            profile.api_key = str(value.get("api_key") or existing.get("api_key", ""))
-            profile.app_id = str(value.get("app_id") or existing.get("app_id", ""))
-            profile.app_key = str(value.get("app_key") or existing.get("app_key", ""))
+            if not profile.id or profile.id in seen:
+                raise ValueError("API profile IDs must be unique")
+            seen.add(profile.id)
+            if profile.provider_type not in {"mathpix", "openai_compatible"}:
+                raise ValueError("Unsupported API provider")
+            profile.name = profile.name.strip()
+            if not profile.name:
+                raise ValueError("API profile name is required")
+            if profile.enabled or profile.base_url.strip():
+                profile.base_url = validate_endpoint(profile.base_url)
+            if profile.enabled and profile.provider_type == "openai_compatible" and not profile.model.strip():
+                raise ValueError("未配置模型 ID")
             profiles.append(profile)
-            try:
-                from api.keychain import KeychainStore
-                secret = {"api_key": profile.api_key, "app_id": profile.app_id, "app_key": profile.app_key}
-                KeychainStore(os.environ.get("FORMULAOCR_KEYCHAIN_SERVICE", "FormulaOCR API Dev")).set(profile.id, secret)
-            except Exception as exc:
-                raise ValueError(f"API 密钥无法保存到 Keychain：{exc}") from exc
-        self.data_root.mkdir(parents=True, exist_ok=True)
-        try:
-            from api.keychain import KeychainStore
-            keychain = KeychainStore(os.environ.get("FORMULAOCR_KEYCHAIN_SERVICE", "FormulaOCR API Dev"))
-            for deleted in previous_ids - {profile.id for profile in profiles}:
-                keychain.delete(deleted)
-        except Exception:
-            pass
+            updates[profile.id] = {key: str(value[key]).strip() for key in ("api_key", "app_id", "app_key") if value.get(key)}
+        active_id = str(params.get("active_profile_id", ""))
+        if not any(p.id == active_id and p.enabled for p in profiles):
+            active_id = next((p.id for p in profiles if p.enabled), "")
         payload = {
             "api_enabled": bool(params.get("api_enabled", False)),
-            "active_profile_id": str(params.get("active_profile_id", profiles[0].id if profiles else "")),
+            "active_profile_id": active_id,
             "profiles": [profile.public_dict() for profile in profiles],
         }
-        temporary = self.profile_store_path.with_suffix(".tmp")
-        temporary.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
-        temporary.replace(self.profile_store_path)
+        keychain = KeychainStore(os.environ.get("FORMULAOCR_KEYCHAIN_SERVICE", "FormulaOCR API"))
+        changed = {account for account, patch in updates.items() if patch}
+        deleted = previous_ids - seen
+        originals = {account: keychain.get(account) for account in changed | deleted}
+        applied = []
+        try:
+            for account in changed:
+                applied.append(account)
+                keychain.set(account, {**originals[account], **updates[account]})
+            for account in deleted:
+                applied.append(account)
+                keychain.delete(account)
+            atomic_json(self.profile_store_path, payload)
+        except Exception:
+            # Never report a failed Save after silently replacing a credential.
+            for account in reversed(applied):
+                if originals[account]:
+                    keychain.set(account, originals[account])
+                else:
+                    keychain.delete(account)
+            raise
 
 
 def main() -> int:
@@ -430,6 +487,8 @@ def main() -> int:
     def respond(request: dict[str, Any]) -> None:
         request_id = request.get("id")
         try:
+            if not isinstance(request.get("id"), str) or not isinstance(request.get("method"), str) or not isinstance(request.get("params", {}), dict):
+                raise ValueError("Request requires a string id, a method, and object params")
             result = sidecar.dispatch(str(request.get("method", "")), request.get("params") or {})
             response = {"id": request_id, "ok": True, "result": _json_value(result)}
         except Exception as exc:
@@ -445,15 +504,27 @@ def main() -> int:
             sys.stdout.flush()
 
     try:
-        with ThreadPoolExecutor(max_workers=4, thread_name_prefix="formulaocr") as executor:
+        with ThreadPoolExecutor(max_workers=1, thread_name_prefix="ocr") as ocr_queue, \
+             ThreadPoolExecutor(max_workers=2, thread_name_prefix="api") as api_queue, \
+             ThreadPoolExecutor(max_workers=2, thread_name_prefix="control") as control_queue:
             for line in sys.stdin:
                 if not line.strip():
                     continue
-                request = json.loads(line)
+                try:
+                    request = json.loads(line)
+                    if not isinstance(request, dict):
+                        raise ValueError("Request must be an object")
+                except (ValueError, json.JSONDecodeError):
+                    respond({"id": None, "method": "", "params": {}})
+                    continue
                 if request.get("method") == "system.shutdown":
-                    executor.shutdown(wait=True)
+                    ocr_queue.shutdown(wait=True, cancel_futures=True)
+                    api_queue.shutdown(wait=True, cancel_futures=True)
+                    control_queue.shutdown(wait=True)
                     respond(request)
                     break
+                method = str(request.get("method", ""))
+                executor = ocr_queue if method in {"ocr.preload", "ocr.recognize"} else api_queue if method.startswith("api.") else control_queue
                 executor.submit(respond, request)
     finally:
         try:

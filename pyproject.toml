@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "formulaocr"
-version = "0.4.0"
+version = "0.4.1"
 description = "Offline formula OCR for macOS Apple Silicon"
 license = "MIT"
 requires-python = ">=3.10,<3.14"
@@ -13,7 +13,6 @@ dependencies = [
   "onnxruntime>=1.28,<2",
   "Pillow>=10,<13",
   "tokenizers>=0.20,<1",
-  "PySide6>=6.7,<7",
   "latex2mathml>=3.80,<4",
   "httpx>=0.27,<1",
   "keyring>=25,<26",
@@ -21,12 +20,18 @@ dependencies = [
   "pyobjc-framework-Vision>=12,<13; sys_platform == 'darwin'",
 ]
 
+[project.optional-dependencies]
+legacy-gui = ["PySide6>=6.7,<7"]
+
 [project.scripts]
 formulaocr = "main:main"
 formulaocr-gui = "main:gui_main"
 
 [tool.setuptools]
 py-modules = ["main"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
 
 [tool.setuptools.packages.find]
 include = ["api*", "app*", "ocr*", "converter*", "clipboard*", "gui*", "sidecar*"]

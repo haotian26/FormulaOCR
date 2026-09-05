@@ -19,3 +19,6 @@ tests/samples/
 
 # Local developer-only data
 .formulaocr-dev/
+test-results/
+playwright-report/
+*.egg-info/

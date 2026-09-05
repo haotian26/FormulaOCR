@@ -4,6 +4,8 @@ use std::process::{Child, ChildStdin, Command, Stdio};
 use std::collections::HashMap;
 use std::sync::{mpsc, Arc, Mutex};
 use std::thread;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::time::Duration;
 use tauri::menu::{Menu, MenuBuilder, MenuItemBuilder};
 use tauri::tray::TrayIconBuilder;
 use tauri::Manager;
@@ -13,6 +15,7 @@ use tauri::{RunEvent, WindowEvent};
 use tauri::ActivationPolicy;
 
 fn show_main_window<R: tauri::Runtime>(app: &tauri::AppHandle<R>) {
+    if app.try_state::<Lifecycle>().map(|state| state.finished.load(Ordering::SeqCst)).unwrap_or(false) { return; }
     let _ = app.set_activation_policy(ActivationPolicy::Regular);
     if let Some(window) = app.get_webview_window("main") {
         let _ = window.show();
@@ -55,10 +58,34 @@ fn staged_png_path(prefix: &str) -> Result<std::path::PathBuf, String> {
 
 #[tauri::command]
 fn stage_image_bytes(bytes: Vec<u8>) -> Result<String, String> {
-    if bytes.is_empty() { return Err("图片数据为空".into()); }
+    if bytes.is_empty() || bytes.len() > 32 * 1024 * 1024 { return Err("图片应小于 32 MB，且不能为空".into()); }
     let path = staged_png_path("input")?;
     std::fs::write(&path, bytes).map_err(|error| format!("无法暂存图片: {error}"))?;
     Ok(path.to_string_lossy().into_owned())
+}
+
+#[tauri::command]
+fn native_copy_text(text: String) -> Result<(), String> {
+    use objc2_app_kit::NSPasteboard;
+    use objc2_foundation::NSString;
+    let pasteboard = NSPasteboard::generalPasteboard();
+    pasteboard.clearContents();
+    if pasteboard.setString_forType(&NSString::from_str(&text), &NSString::from_str("public.utf8-plain-text")) { Ok(()) }
+    else { Err("macOS 剪贴板拒绝写入".into()) }
+}
+
+#[tauri::command]
+fn native_paste_image() -> Result<String, String> {
+    use objc2_app_kit::{NSPasteboard, NSBitmapImageRep, NSBitmapImageFileType};
+    use objc2_foundation::{NSString, NSDictionary};
+    let pasteboard = NSPasteboard::generalPasteboard();
+    let data = pasteboard.dataForType(&NSString::from_str("public.png"))
+        .or_else(|| pasteboard.dataForType(&NSString::from_str("public.tiff")))
+        .ok_or("剪贴板中没有图片")?;
+    let image = NSBitmapImageRep::imageRepWithData(&data).ok_or("无法读取剪贴板图片")?;
+    // An empty properties dictionary is valid for PNG encoding.
+    let png = unsafe { image.representationUsingType_properties(NSBitmapImageFileType::PNG, &NSDictionary::new()) }.ok_or("无法转换剪贴板图片")?;
+    stage_image_bytes(png.to_vec())
 }
 
 #[cfg(target_os = "macos")]
@@ -272,7 +299,7 @@ fn install_native_function_symbol<R: tauri::Runtime>(tray: &tauri::tray::TrayIco
 fn install_native_function_symbol<R: tauri::Runtime>(_tray: &tauri::tray::TrayIcon<R>) {}
 
 struct Bridge {
-    _child: Arc<Mutex<Child>>,
+    child: Arc<Mutex<Child>>,
     stdin: Arc<Mutex<ChildStdin>>,
     pending: Arc<Mutex<HashMap<String, mpsc::Sender<Result<Value, String>>>>>,
 }
@@ -311,6 +338,8 @@ impl Bridge {
         );
         if let Ok(data_root) = std::env::var("FORMULAOCR_DATA_ROOT") {
             command.env("FORMULAOCR_DATA_ROOT", data_root);
+        } else if cfg!(debug_assertions) {
+            command.env("FORMULAOCR_DATA_ROOT", std::env::temp_dir().join("formulaocr-development"));
         }
         let mut child = command
             .stdin(Stdio::piped())
@@ -342,13 +371,16 @@ impl Bridge {
                 for (_, waiter) in waiters.drain() { let _ = waiter.send(Err("sidecar 已退出".into())); }
             }
         }).map_err(|error| format!("无法启动 sidecar 响应线程: {error}"))?;
-        Ok(Self { _child: Arc::new(Mutex::new(child)), stdin, pending })
+        Ok(Self { child: Arc::new(Mutex::new(child)), stdin, pending })
     }
 
     fn request(&self, request: &Value) -> Result<Value, String> {
         let id = request.get("id").and_then(Value::as_str).ok_or("sidecar request id is missing")?.to_string();
         let (sender, receiver) = mpsc::channel();
-        self.pending.lock().map_err(|_| "sidecar 请求表锁定失败")?.insert(id.clone(), sender);
+        let mut pending = self.pending.lock().map_err(|_| "sidecar 请求表锁定失败")?;
+        if pending.contains_key(&id) { return Err("duplicate sidecar request id".into()); }
+        pending.insert(id.clone(), sender);
+        drop(pending);
         let line = serde_json::to_string(request).map_err(|e| e.to_string())?;
         let write_result = (|| {
             let mut stdin = self.stdin.lock().map_err(|_| "sidecar 输入锁定失败")?;
@@ -359,12 +391,31 @@ impl Bridge {
             let _ = self.pending.lock().map(|mut waiters| waiters.remove(&id));
             return Err(error);
         }
-        receiver.recv().map_err(|_| "sidecar 响应通道已关闭".to_string())?
+        let timeout = if request["method"] == "system.shutdown" { 3 } else { 260 };
+        let result = receiver.recv_timeout(Duration::from_secs(timeout)).map_err(|_| "sidecar response timed out or disconnected".to_string());
+        if result.is_err() { let _ = self.pending.lock().map(|mut waiters| waiters.remove(&id)); }
+        result?
+    }
+}
+
+impl Drop for Bridge {
+    fn drop(&mut self) {
+        if let Ok(mut child) = self.child.lock() {
+            if child.try_wait().ok().flatten().is_none() { let _ = child.kill(); }
+            let _ = child.wait();
+        }
     }
 }
 
 struct AppState(Arc<Mutex<Option<Arc<Bridge>>>>);
 struct HotkeyState(Mutex<String>);
+#[derive(Default)]
+struct Lifecycle { requested: AtomicBool, finished: AtomicBool, recording: AtomicBool, capturing: AtomicBool }
+
+#[tauri::command]
+fn set_hotkey_recording(state: tauri::State<'_, Lifecycle>, recording: bool) {
+    state.recording.store(recording, Ordering::SeqCst);
+}
 
 #[tauri::command]
 async fn sidecar_request(state: tauri::State<'_, AppState>, request: Value) -> Result<Value, String> {
@@ -381,7 +432,9 @@ async fn sidecar_request(state: tauri::State<'_, AppState>, request: Value) -> R
         match instance.request(&request) {
             Ok(value) => Ok(value),
             Err(first_error) => {
-                if let Ok(mut bridge) = state.lock() { *bridge = None; }
+                if let Ok(mut bridge) = state.lock() {
+                    if bridge.as_ref().map(|value| Arc::ptr_eq(value, &instance)).unwrap_or(false) { *bridge = None; }
+                }
                 Err(first_error)
             }
         }
@@ -392,6 +445,7 @@ async fn sidecar_request(state: tauri::State<'_, AppState>, request: Value) -> R
 
 #[tauri::command]
 async fn native_screenshot<R: tauri::Runtime>(app: tauri::AppHandle<R>) -> Result<String, String> {
+    if app.state::<Lifecycle>().capturing.swap(true, Ordering::SeqCst) { return Err("截图正在进行".into()); }
     // Read the selected region from a private temporary PNG instead of
     // immediately reading NSPasteboard from the WebView.  Clipboard reads
     // are permission-sensitive on macOS and, after a global shortcut, may
@@ -400,7 +454,7 @@ async fn native_screenshot<R: tauri::Runtime>(app: tauri::AppHandle<R>) -> Resul
     let bytes = tauri::async_runtime::spawn_blocking(move || {
         let path = staged_png_path("capture")?;
         let status = std::process::Command::new("/usr/sbin/screencapture")
-            .args(["-i", "-s"])
+            .args(["-i", "-s", "-x"])
             .arg(&path)
             .status()
             .map_err(|error| format!("无法启动 macOS 截图: {error}"))?;
@@ -415,7 +469,9 @@ async fn native_screenshot<R: tauri::Runtime>(app: tauri::AppHandle<R>) -> Resul
         Ok::<String, String>(path.to_string_lossy().into_owned())
     })
     .await
-    .map_err(|error| format!("截图工作线程失败: {error}"))??;
+    .map_err(|error| format!("截图工作线程失败: {error}"));
+    app.state::<Lifecycle>().capturing.store(false, Ordering::SeqCst);
+    let bytes = bytes??;
     // A global shortcut may start capture while the app is hidden. Restore
     // the main window only after the selection overlay has gone away.
     show_main_window(&app);
@@ -426,48 +482,112 @@ async fn native_screenshot<R: tauri::Runtime>(app: tauri::AppHandle<R>) -> Resul
 fn set_global_hotkey<R: tauri::Runtime>(app: tauri::AppHandle<R>, state: tauri::State<'_, HotkeyState>, shortcut: String) -> Result<(), String> {
     // Replace the binding only after the new accelerator has been validated.
     // The plugin-level handler installed in `run` handles dynamically registered shortcuts too.
-    let previous = state.0.lock().map_err(|_| "快捷键状态锁定失败")?.clone();
-    app.global_shortcut().unregister_all().map_err(|e| e.to_string())?;
+    let mut binding = state.0.lock().map_err(|_| "快捷键状态锁定失败")?;
+    let previous = binding.clone();
+    if previous == shortcut.trim() { return Ok(()); }
     if !shortcut.trim().is_empty() {
         if let Err(error) = app.global_shortcut().register(shortcut.trim()) {
-            if !previous.is_empty() { let _ = app.global_shortcut().register(previous.as_str()); }
             return Err(error.to_string());
         }
     }
-    *state.0.lock().map_err(|_| "快捷键状态锁定失败")? = shortcut.trim().to_string();
+    if !previous.is_empty() {
+        if let Err(error) = app.global_shortcut().unregister(previous.as_str()) {
+            if !shortcut.trim().is_empty() { let _ = app.global_shortcut().unregister(shortcut.trim()); }
+            return Err(error.to_string());
+        }
+    }
+    *binding = shortcut.trim().to_string();
     Ok(())
 }
 
 fn shutdown_sidecar<R: tauri::Runtime>(app: &tauri::AppHandle<R>) {
-    if let Some(state) = app.try_state::<AppState>() {
-        if let Ok(mut bridge) = state.0.lock() {
-            if let Some(instance) = bridge.as_ref() {
-                let _ = instance.request(&serde_json::json!({"id":"shutdown","method":"system.shutdown","params":{}}));
-            }
-            *bridge = None;
+    let instance = app.try_state::<AppState>().and_then(|state| state.0.lock().ok().and_then(|mut bridge| bridge.take()));
+    if let Some(instance) = instance {
+        let _ = instance.request(&serde_json::json!({"id":"shutdown","method":"system.shutdown","params":{}}));
+        if let Ok(mut child) = instance.child.lock() {
+            if child.try_wait().ok().flatten().is_none() { let _ = child.kill(); }
+            let _ = child.wait();
         }
     }
-    let _ = app.global_shortcut().unregister_all();
+}
+
+fn begin_quit<R: tauri::Runtime>(app: &tauri::AppHandle<R>) {
+    if app.state::<Lifecycle>().requested.swap(true, Ordering::SeqCst) { return; }
+    let target = if app.get_webview_window("settings").is_some() { "settings" } else { "main" };
+    let _ = app.emit_to(target, "formulaocr://quit-requested", ());
 }
 
 #[tauri::command]
-fn quit_application<R: tauri::Runtime>(app: tauri::AppHandle<R>) -> Result<(), String> {
-    shutdown_sidecar(&app);
+fn cancel_quit(state: tauri::State<'_, Lifecycle>) { state.requested.store(false, Ordering::SeqCst); }
+
+#[tauri::command]
+fn continue_quit<R: tauri::Runtime>(app: tauri::AppHandle<R>) {
+    let _ = app.emit_to("main", "formulaocr://flush-before-quit", ());
+}
+
+#[tauri::command]
+async fn complete_quit<R: tauri::Runtime>(app: tauri::AppHandle<R>) -> Result<(), String> {
+    if app.state::<Lifecycle>().finished.swap(true, Ordering::SeqCst) { return Ok(()); }
+    let _ = app.global_shortcut().unregister_all();
+    let _ = app.remove_tray_by_id("main");
+    let cleanup = app.clone();
+    tauri::async_runtime::spawn_blocking(move || shutdown_sidecar(&cleanup)).await.map_err(|error| error.to_string())?;
     app.exit(0);
     Ok(())
 }
 
 #[tauri::command]
+fn quit_application<R: tauri::Runtime>(app: tauri::AppHandle<R>) { begin_quit(&app); }
+
+#[tauri::command]
+fn main_geometry<R: tauri::Runtime>(app: tauri::AppHandle<R>) -> Result<Value, String> {
+    let window = app.get_webview_window("main").ok_or("main window unavailable")?;
+    let scale = window.scale_factor().map_err(|error| error.to_string())?;
+    let position = window.outer_position().map_err(|error| error.to_string())?.to_logical::<f64>(scale);
+    let size = window.inner_size().map_err(|error| error.to_string())?.to_logical::<f64>(scale);
+    Ok(serde_json::json!({"x":position.x, "y":position.y, "width":size.width, "height":size.height}))
+}
+
+#[tauri::command]
+fn restore_main_geometry<R: tauri::Runtime>(app: tauri::AppHandle<R>, geometry: Value) -> Result<(), String> {
+    let window = app.get_webview_window("main").ok_or("main window unavailable")?;
+    let monitor = window.current_monitor().map_err(|e| e.to_string())?.or(window.primary_monitor().map_err(|e| e.to_string())?).ok_or("display unavailable")?;
+    let scale = monitor.scale_factor();
+    let size = monitor.size().to_logical::<f64>(scale);
+    let origin = monitor.position().to_logical::<f64>(scale);
+    let valid = |key: &str, fallback: f64| geometry[key].as_f64().filter(|value| value.is_finite()).unwrap_or(fallback);
+    let width = valid("width", 1120.0).clamp(900.0, size.width.max(900.0));
+    let height = valid("height", 760.0).clamp(650.0, (size.height - 80.0).max(650.0));
+    let x = valid("x", origin.x + (size.width - width) / 2.0).clamp(origin.x, origin.x + (size.width - width).max(0.0));
+    let y = valid("y", origin.y + 40.0).clamp(origin.y + 30.0, origin.y + (size.height - height - 40.0).max(30.0));
+    window.set_size(tauri::LogicalSize::new(width, height)).map_err(|e| e.to_string())?;
+    window.set_position(tauri::LogicalPosition::new(x, y)).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
 fn set_activation_policy<R: tauri::Runtime>(app: tauri::AppHandle<R>, accessory: bool) -> Result<(), String> {
+    if app.state::<Lifecycle>().requested.load(Ordering::SeqCst) { return Ok(()); }
     app.set_activation_policy(if accessory { ActivationPolicy::Accessory } else { ActivationPolicy::Regular }).map_err(|error| error.to_string())
 }
 
 #[tauri::command]
 fn resize_settings_window<R: tauri::Runtime>(app: tauri::AppHandle<R>, width: f64, height: f64) -> Result<(), String> {
     let window = app.get_webview_window("settings").ok_or("设置窗口不存在")?;
+    if !width.is_finite() || !height.is_finite() { return Err("Invalid window size".into()); }
+    let monitor = window.current_monitor().map_err(|e| e.to_string())?.ok_or("display unavailable")?;
+    let scale = monitor.scale_factor();
+    let screen = monitor.size().to_logical::<f64>(scale);
+    let origin = monitor.position().to_logical::<f64>(scale);
+    let width = width.clamp(760.0, screen.width.max(760.0));
+    let height = height.clamp(420.0, (screen.height - 90.0).max(420.0));
+    let position = window.outer_position().map_err(|e| e.to_string())?.to_logical::<f64>(scale);
     window
-        .set_size(tauri::LogicalSize::new(width.max(760.0), height.max(420.0)))
-        .map_err(|error| error.to_string())
+        .set_size(tauri::LogicalSize::new(width, height))
+        .map_err(|error| error.to_string())?;
+    window.set_position(tauri::LogicalPosition::new(
+        position.x.clamp(origin.x, origin.x + (screen.width - width).max(0.0)),
+        position.y.clamp(origin.y + 30.0, origin.y + (screen.height - height - 40.0).max(30.0)),
+    )).map_err(|error| error.to_string())
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -478,18 +598,17 @@ pub fn run() {
         }))
         .plugin(
             tauri_plugin_global_shortcut::Builder::new()
-                .with_shortcut("ctrl+alt+cmd+o")
-                .expect("default screenshot shortcut is valid")
                 .with_handler(|app, _shortcut, event| {
-                    if event.state == ShortcutState::Pressed {
+                    if event.state == ShortcutState::Pressed && !app.state::<Lifecycle>().recording.load(Ordering::SeqCst) && !app.state::<Lifecycle>().requested.load(Ordering::SeqCst) {
                         let _ = app.emit("formulaocr://screenshot-requested", ());
                     }
                 })
                 .build(),
         )
         .manage(AppState(Arc::new(Mutex::new(None))))
-        .manage(HotkeyState(Mutex::new("ctrl+alt+cmd+o".to_string())))
-        .invoke_handler(tauri::generate_handler![sidecar_request, stage_image_bytes, native_copy_word, native_screenshot, set_global_hotkey, set_menu_language, quit_application, set_activation_policy, resize_settings_window])
+        .manage(HotkeyState(Mutex::new(String::new())))
+        .manage(Lifecycle::default())
+        .invoke_handler(tauri::generate_handler![sidecar_request, stage_image_bytes, native_copy_word, native_screenshot, set_global_hotkey, set_menu_language, quit_application, set_activation_policy, resize_settings_window, native_copy_text, native_paste_image, set_hotkey_recording, cancel_quit, continue_quit, complete_quit, main_geometry, restore_main_geometry])
         .setup(|app| {
             let menu = tray_menu(app.handle(), "zh-CN")?;
             let mut tray_builder = TrayIconBuilder::with_id("main")
@@ -508,7 +627,7 @@ pub fn run() {
                     }
                     "screenshot" => { let _ = app.emit("formulaocr://screenshot-requested", ()); }
                     "settings" => { let _ = app.emit("formulaocr://open-settings", "常规"); }
-                    "quit" => { shutdown_sidecar(app); app.exit(0); }
+                    "quit" => begin_quit(app),
                     _ => {}
                 });
             let tray = tray.build(app)?;
@@ -531,9 +650,14 @@ pub fn run() {
         .build(tauri::generate_context!())
         .expect("error while building FormulaOCR");
     app.run(|app, event| {
-        #[cfg(target_os = "macos")]
-        if let RunEvent::Reopen { .. } = event {
-            show_main_window(app);
+        match event {
+            RunEvent::ExitRequested { api, .. } if !app.state::<Lifecycle>().finished.load(Ordering::SeqCst) => {
+                api.prevent_exit();
+                begin_quit(app);
+            }
+            RunEvent::Reopen { .. } => show_main_window(app),
+            RunEvent::Exit => shutdown_sidecar(app),
+            _ => {}
         }
     });
 }

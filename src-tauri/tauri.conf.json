@@ -1,9 +1,9 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
   "productName": "FormulaOCR",
-  "version": "0.4.0",
+  "version": "0.4.1",
   "identifier": "com.formulaocr.FormulaOCRApp",
   "build": { "beforeDevCommand": "npm run dev", "beforeBuildCommand": "npm run build", "devUrl": "http://localhost:1420", "frontendDist": "../dist" },
-  "app": { "windows": [{ "title": "FormulaOCR", "width": 1120, "height": 760, "minWidth": 900, "minHeight": 650, "resizable": true }], "security": { "csp": "default-src 'self' ipc: http://ipc.localhost; img-src 'self' asset: http://asset.localhost blob: data:; style-src 'self' 'unsafe-inline'; connect-src ipc: http://ipc.localhost asset: http://asset.localhost", "assetProtocol": { "enable": true, "scope": ["$TEMP/formulaocr-stage/**", "$HOME/Library/Application Support/FormulaOCR/history/images/**"] } } },
-  "bundle": { "active": true, "targets": ["app"], "icon": ["../resources/icons/FormulaOCR.icns"], "resources": { "../resources/models/PP-FormulaNet_plus-L-ONNX/pp_formulanet_plus_l.onnx": "pp_formulanet_plus_l.onnx" }, "macOS": { "minimumSystemVersion": "13.0" } }
+  "app": { "windows": [{ "title": "FormulaOCR", "width": 1120, "height": 760, "minWidth": 900, "minHeight": 650, "resizable": true, "backgroundThrottling": "disabled" }], "security": { "csp": "default-src 'self' ipc: http://ipc.localhost; img-src 'self' asset: http://asset.localhost blob: data:; style-src 'self' 'unsafe-inline'; connect-src ipc: http://ipc.localhost asset: http://asset.localhost", "assetProtocol": { "enable": true, "scope": ["$TEMP/formulaocr-stage/**", "$HOME/Library/Application Support/FormulaOCR/history/images/**"] } } },
+  "bundle": { "active": true, "targets": ["app"], "icon": ["../resources/icons/FormulaOCR.icns"], "resources": { "../resources/models/PP-FormulaNet_plus-L-ONNX/pp_formulanet_plus_l.onnx": "pp_formulanet_plus_l.onnx" }, "macOS": { "minimumSystemVersion": "14.0" } }
 }

@@ -1,6 +1,14 @@
 export type AppLanguage = "zh-CN" | "en";
 
 const english: Record<string, string> = {
+  "请输入配置名称": "Enter a profile name",
+  "请输入 HTTPS 地址；本机服务可使用 HTTP": "Enter an HTTPS URL; local services may use HTTP",
+  "请输入模型 ID": "Enter a model ID",
+  "超时应为 5–120 秒": "Timeout must be 5–120 seconds",
+  "历史保存失败：{error}": "History could not be saved: {error}",
+  "快捷键注册失败：{error}": "Could not register shortcut: {error}",
+  "已检查凭据格式；未联网验证": "Credentials supplied; not verified with the server",
+  "输入新密钥，或留空保持不变": "Enter a new key, or leave blank to keep the existing key",
   "FormulaOCR 设置": "FormulaOCR Settings",
   "LaTeX 编辑器": "LaTeX editor",
   "公式将在这里预览": "The formula preview will appear here",

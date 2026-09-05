@@ -9,6 +9,7 @@ import threading
 import time
 import uuid
 from dataclasses import dataclass
+from functools import wraps
 from pathlib import Path
 
 try:  # The Tauri sidecar must also run without importing the Qt GUI layer.
@@ -18,6 +19,14 @@ except ImportError:  # pragma: no cover - exercised by sidecar environments
 
 
 DEFAULT_HISTORY_LIMIT = 200
+
+
+def synchronized(method):
+    @wraps(method)
+    def run(self, *args, **kwargs):
+        with self._lock:
+            return method(self, *args, **kwargs)
+    return run
 
 
 @dataclass(frozen=True)
@@ -41,7 +50,7 @@ class HistoryRecord:
 
     @property
     def has_api(self) -> bool:
-        return bool(self.api_draft_latex)
+        return self.api_raw_latex is not None
 
 
 class HistoryStore:
@@ -70,6 +79,7 @@ class HistoryStore:
     def limit(self) -> int:
         return self._limit
 
+    @synchronized
     def close(self) -> None:
         self._connection.close()
 
@@ -131,6 +141,7 @@ class HistoryStore:
             raise
         return target
 
+    @synchronized
     def create_local(
         self,
         image_png: bytes,
@@ -161,6 +172,7 @@ class HistoryStore:
             raise
         return self.get(record_id)  # type: ignore[return-value]
 
+    @synchronized
     def update_api(
         self,
         record_id: str,
@@ -183,6 +195,7 @@ class HistoryStore:
         self._connection.commit()
         return self.get(record_id) if cursor.rowcount else None
 
+    @synchronized
     def update_draft(self, record_id: str, source: str, draft_latex: str) -> None:
         if source not in {"local", "api"}:
             return
@@ -193,6 +206,7 @@ class HistoryStore:
         )
         self._connection.commit()
 
+    @synchronized
     def set_active_source(self, record_id: str, source: str) -> None:
         if source not in {"local", "api"}:
             return
@@ -202,6 +216,7 @@ class HistoryStore:
         )
         self._connection.commit()
 
+    @synchronized
     def set_recognition_mode(self, record_id: str, mode: str) -> None:
         if mode not in {"chemistry", "math"}:
             return
@@ -211,14 +226,17 @@ class HistoryStore:
         )
         self._connection.commit()
 
+    @synchronized
     def get(self, record_id: str) -> HistoryRecord | None:
         row = self._connection.execute("SELECT * FROM history WHERE id=?", (record_id,)).fetchone()
         return self._record(row) if row is not None else None
 
+    @synchronized
     def list_records(self) -> list[HistoryRecord]:
         rows = self._connection.execute("SELECT * FROM history ORDER BY updated_at DESC").fetchall()
         return [self._record(row) for row in rows]
 
+    @synchronized
     def delete(self, record_id: str) -> bool:
         record = self.get(record_id)
         if record is None:
@@ -228,12 +246,14 @@ class HistoryStore:
         Path(record.image_path).unlink(missing_ok=True)
         return True
 
+    @synchronized
     def delete_many(self, record_ids: list[str]) -> int:
         removed = 0
         for record_id in dict.fromkeys(record_ids):
             removed += int(self.delete(record_id))
         return removed
 
+    @synchronized
     def delete_all(self) -> int:
         records = self.list_records()
         self._connection.execute("DELETE FROM history")
@@ -242,11 +262,13 @@ class HistoryStore:
             Path(record.image_path).unlink(missing_ok=True)
         return len(records)
 
+    @synchronized
     def set_limit(self, limit: int) -> int:
         self._limit = max(20, min(2000, int(limit)))
         self.prune()
         return self._limit
 
+    @synchronized
     def prune(self) -> int:
         rows = self._connection.execute(
             "SELECT id, image_path FROM history ORDER BY updated_at DESC LIMIT -1 OFFSET ?",

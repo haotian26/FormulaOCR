@@ -1,6 +1,6 @@
 # FormulaOCR — current state
 
-Version: **0.4.1 local acceptance candidate**
+Version: **0.4.1**
 
 Platform: Apple Silicon, macOS 14 or newer
 
@@ -41,6 +41,6 @@ Keep that output editable and show the rendering error; do not invent a fix.
 Small charges and degree symbols remain known model limitations. Native Word
 paste fidelity requires checking the user's actual Word version.
 
-A build is not a public release. This review does not publish a Git tag, GitHub
-Release or DMG. Do not replace this candidate label with "final" or "zero bugs"
-without the corresponding acceptance evidence.
+Distribution uses a compressed UDBZ DMG, an arm64 application and ad-hoc signing.
+The application is not Apple-notarized. Release checks and known limitations are
+recorded in [RELEASE_0.4.1.md](RELEASE_0.4.1.md).

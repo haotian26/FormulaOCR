@@ -25,6 +25,8 @@ test -x "$SIDECAR/formulaocr-sidecar"
 rm -rf "$DEST"
 /usr/bin/ditto "$SIDECAR" "$DEST"
 
+"$PYTHON" "$ROOT/tools/collect_runtime_notices.py" "$APP"
+
 codesign --force --deep --sign - "$APP"
 codesign --verify --deep --strict "$APP"
 echo "$APP"

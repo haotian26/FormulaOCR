@@ -2,7 +2,7 @@
 
 ## [Unreleased]
 
-## [0.4.1] - Unreleased candidate
+## [0.4.1] - 2026-09-08
 
 ### 中文
 
@@ -13,6 +13,7 @@
 - 改善中英文最小窗口、表单对齐、禁用状态、深色模式与历史抽屉。
 - 完善退出清理、后台快捷键与测试覆盖，生产依赖不再要求 PySide6。
 - 保留当前 L 模型与预处理；最低系统要求如实设为 macOS 14。
+- 安装包附带版本化的第三方许可文本，并检查 DMG 压缩格式和体积。
 
 ### English
 
@@ -26,6 +27,7 @@
 - Hardened shutdown and background shortcuts; expanded regression tests.
 - Kept the existing model and preprocessing. The packaged runtime requires macOS 14;
   PySide6 is now optional for the archived GUI only.
+- Included versioned third-party notices and added compressed DMG size checks.
 
 ## [0.4.0] - 2026-08-24
 

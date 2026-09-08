@@ -1,6 +1,6 @@
 # 0.4.1 review and acceptance
 
-This candidate focuses on reliability and everyday usability. It does not change
+This review focuses on reliability and everyday usability. It does not change
 the OCR model or claim an increase in recognition accuracy.
 
 ## Findings and changes
@@ -109,4 +109,4 @@ not contact a real recognition API or modify production keys.
   a separately labelled benchmark, not heuristic charge correction.
 - Apple notarization is not supplied by ad-hoc signing.
 
-No public release or DMG is created by this review.
+Distribution checks are recorded separately in [RELEASE_0.4.1.md](RELEASE_0.4.1.md).

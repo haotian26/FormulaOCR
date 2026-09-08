@@ -56,7 +56,7 @@ Apple-notarized, so macOS may ask you to Control-click the app and choose
 ## Build from source
 
 You will need Apple Silicon macOS 14+, Xcode Command Line Tools, Rust, Node.js 20+
-and Python 3.10–3.13.
+and Python 3.11–3.13 for the packaging tools.
 
 ```bash
 npm ci
@@ -68,6 +68,8 @@ FORMULAOCR_PYTHON=/private/tmp/formulaocr-venv/bin/python tools/build_tauri_app.
 
 `tools/download_model.py` downloads the fixed model version and verifies its
 SHA256 before use. FormulaOCR never downloads a model while the app is running.
+The build also collects third-party license texts, fetching missing notices
+from their versioned upstream sources. These are included inside the app.
 
 Basic checks:
 

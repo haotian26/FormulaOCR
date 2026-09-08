@@ -55,7 +55,7 @@ FormulaOCR 是一个用来处理公式截图的小工具。你可以从论文、
 ## 从源码构建
 
 需要 Apple Silicon Mac、Xcode Command Line Tools、Rust、Node.js 20+，
-以及 Python 3.10–3.13。
+以及 Python 3.11–3.13（用于打包工具）。
 
 ```bash
 npm ci
@@ -67,6 +67,8 @@ FORMULAOCR_PYTHON=/private/tmp/formulaocr-venv/bin/python tools/build_tauri_app.
 
 `tools/download_model.py` 会下载固定版本的模型并检查 SHA256。FormulaOCR
 运行时不会自行下载模型。
+构建时还会收集第三方许可文本，缺少的文本从对应版本的上游来源获取，
+并随 App 一起分发。
 
 基本检查命令：
 

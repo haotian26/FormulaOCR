@@ -1,7 +1,7 @@
 # FormulaOCR — current state
 
-Development version: **0.4.2** (local verification; not published)
-Latest public release: **0.4.1**
+Current version: **0.4.2**
+Latest public release: **0.4.2**
 
 Platform: Apple Silicon, macOS 14 or newer
 
@@ -32,7 +32,7 @@ measurement definitions and rejected candidate.
 
 The CI workflow is prepared locally, including native fault tests and an
 opt-in model benchmark. It is not active on GitHub until explicitly pushed
-with workflow permission. This development update does not create a Release.
+with workflow permission. It is not included in the release source commit.
 
 Local acceptance and remaining limitations are recorded in
 [REVIEW_0.4.2.md](REVIEW_0.4.2.md).
@@ -65,4 +65,4 @@ paste fidelity requires checking the user's actual Word version.
 
 Distribution uses a compressed UDBZ DMG, an arm64 application and ad-hoc signing.
 The application is not Apple-notarized. Release checks and known limitations are
-recorded in [RELEASE_0.4.1.md](RELEASE_0.4.1.md).
+recorded in [RELEASE_0.4.2.md](RELEASE_0.4.2.md).

@@ -37,8 +37,7 @@ FormulaOCR 是一个用来处理公式截图的小工具。你可以从论文、
 
 ## 安装
 
-当前源码为 0.4.2，可下载的正式版本仍是 0.4.1。
-图片缩放、历史搜索与导出、手动检查更新是 0.4.2 新增的功能。
+最新版本为 0.4.2，新增图片缩放、历史搜索与导出、手动检查更新。
 
 从 [Releases](https://github.com/haotian26/FormulaOCR/releases/latest)
 下载最新 DMG，打开后把 FormulaOCR 拖入“应用程序”文件夹。

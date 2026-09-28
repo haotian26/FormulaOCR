@@ -38,8 +38,8 @@ the current image when you click **API re-recognize**.
 
 ## Install
 
-The source is at 0.4.2; the latest downloadable release is still 0.4.1.
-Image zoom, history search/export and the update checker are new in 0.4.2.
+The latest release is 0.4.2, with image zoom, history search/export and a manual
+update checker.
 
 Download the latest DMG from [Releases](https://github.com/haotian26/FormulaOCR/releases/latest),
 open it, and drag FormulaOCR into Applications.

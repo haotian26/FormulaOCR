@@ -1,7 +1,7 @@
 # FormulaOCR 0.4.2 verification
 
-Source update and locally verified candidate, 28 September 2026. No 0.4.2
-GitHub Release or DMG has been published. Existing user data is retained.
+Locally verified build, 28 September 2026. Distribution checks are recorded in
+[RELEASE_0.4.2.md](RELEASE_0.4.2.md). Existing user data is retained.
 
 ## Changes
 
@@ -55,7 +55,7 @@ The existing 16 history records remain intact. The old app is kept as a
 recoverable copy in Trash; history, settings and Keychain are not reset.
 
 The app uses approximately 844 MiB of allocated disk space, only about 200 KiB
-more than the preceding installed build. No DMG size is claimed for this run.
+more than the preceding installed build. See the release notes for DMG size.
 
 ## Recognition and size boundaries
 

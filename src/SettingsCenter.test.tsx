@@ -127,4 +127,46 @@ describe("settings interaction", () => {
     expect(save().disabled).toBe(true);
     expect(mock.emit).not.toHaveBeenCalled();
   });
+  it("invalidates an in-flight model list after editing the same profile and ignores its late failure", async () => {
+    let rejectOld: (error: Error) => void = () => {};
+    let resolveNew: (result: unknown) => void = () => {};
+    mock.call.mockImplementation(async (method) => {
+      if (method === "settings.get") return defaults;
+      if (method === "profiles.list") return { api_enabled:true, active_profile_id:"a", profiles:[{ id:"a", name:"Test", enabled:true, provider_type:"openai_compatible", base_url:"https://example.com/v1", model:"m", timeout_s:45 }] };
+      if (method === "api.listModels") return new Promise((_resolve, reject) => { rejectOld = reject; });
+      if (method === "api.testProfile") return new Promise(resolve => { resolveNew = resolve; });
+      return {};
+    });
+    await open("自定义模型与 API");
+    fireEvent.click(screen.getByRole("button", { name:"获取模型" }));
+    fireEvent.change(screen.getByLabelText("Base URL"), { target:{ value:"https://new.example/v1" } });
+    expect((screen.getByRole("button", { name:"测试配置" }) as HTMLButtonElement).disabled).toBe(false);
+    fireEvent.click(screen.getByRole("button", { name:"测试配置" }));
+    await act(async () => { rejectOld(Error("old endpoint failure")); });
+    expect(screen.queryByText("old endpoint failure")).toBeNull();
+    expect((screen.getByRole("button", { name:"测试中…" }) as HTMLButtonElement).disabled).toBe(true);
+    await act(async () => { resolveNew({ message:"new endpoint verified" }); });
+    expect(screen.getByText("new endpoint verified")).toBeTruthy();
+  });
+  it("discards delayed test success and clears previously fetched models after same-profile edits", async () => {
+    let resolveOld: (result: unknown) => void = () => {};
+    mock.call.mockImplementation(async (method) => {
+      if (method === "settings.get") return defaults;
+      if (method === "profiles.list") return { api_enabled:true, active_profile_id:"a", profiles:[{ id:"a", name:"Test", enabled:true, provider_type:"openai_compatible", base_url:"https://example.com/v1", model:"m", timeout_s:45 }] };
+      if (method === "api.listModels") return { models:["old-model"] };
+      if (method === "api.testProfile") return new Promise(resolve => { resolveOld = resolve; });
+      return {};
+    });
+    await open("自定义模型与 API");
+    fireEvent.click(screen.getByRole("button", { name:"获取模型" }));
+    await screen.findByText("已获取 1 个模型");
+    expect(document.querySelectorAll("#formulaocr-models option")).toHaveLength(1);
+    fireEvent.click(screen.getByRole("button", { name:"测试配置" }));
+    fireEvent.change(screen.getByLabelText("模型 ID"), { target:{ value:"different-model" } });
+    expect(screen.queryByText("已获取 1 个模型")).toBeNull();
+    expect(document.querySelectorAll("#formulaocr-models option")).toHaveLength(0);
+    await act(async () => { resolveOld({ message:"stale success", models:["stale-model"] }); });
+    expect(screen.queryByText("stale success")).toBeNull();
+    expect(document.querySelectorAll("#formulaocr-models option")).toHaveLength(0);
+  });
 });

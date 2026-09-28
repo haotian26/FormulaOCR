@@ -26,14 +26,20 @@ the current image when you click **API re-recognize**.
 - Recognize formulas offline with PP-FormulaNet_plus-L.
 - Switch between chemistry formatting and ordinary mathematics formatting.
 - Edit LaTeX and see the rendered result beside it.
+- Zoom or pan the source image, including actual-size inspection of small symbols.
 - Copy LaTeX or an editable Word equation.
 - Keep local recognition history and separate local/API drafts.
+- Search history by formula or profile and export selected LaTeX drafts.
 - Run from the menu bar and use a configurable screenshot shortcut.
 - Switch the complete interface between English and Simplified Chinese.
+- Check for updates from General → About FormulaOCR, without automatic downloads.
 - Connect to OpenAI-compatible or Mathpix APIs when local recognition needs a
   second opinion.
 
 ## Install
+
+The source is at 0.4.2; the latest downloadable release is still 0.4.1.
+Image zoom, history search/export and the update checker are new in 0.4.2.
 
 Download the latest DMG from [Releases](https://github.com/haotian26/FormulaOCR/releases/latest),
 open it, and drag FormulaOCR into Applications.

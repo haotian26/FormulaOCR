@@ -54,4 +54,47 @@ describe("durable draft queue", () => {
     queue.schedule({ id:"a", source:"local", latex:"2" }); await queue.flush();
     expect(error).toHaveBeenCalledTimes(1); expect(write).toHaveBeenCalledTimes(2);
   });
+  it("retains the failed draft for an explicit retry", async () => {
+    const write = vi.fn().mockRejectedValueOnce(Error("disk")).mockResolvedValue(undefined);
+    const queue = new DraftQueue(write, vi.fn());
+    queue.schedule({ id:"a", source:"local", latex:"unsaved" });
+    expect(await queue.flush()).toBe(false);
+    expect(queue.hasPending()).toBe(true);
+    expect(await queue.flush()).toBe(true);
+    expect(write).toHaveBeenCalledTimes(2);
+    expect(write.mock.calls[1][0].latex).toBe("unsaved");
+  });
+  it("never restores an old failed draft over a newer edit", async () => {
+    let reject!: (error: Error) => void;
+    const write = vi.fn().mockImplementationOnce(() => new Promise((_, fail) => { reject = fail; })).mockResolvedValue(undefined);
+    const queue = new DraftQueue(write, vi.fn());
+    queue.schedule({ id:"a", source:"local", latex:"old" });
+    const first = queue.flush(); await Promise.resolve();
+    queue.schedule({ id:"a", source:"local", latex:"new" });
+    reject(Error("disk")); expect(await first).toBe(false);
+    expect(await queue.flush()).toBe(true);
+    expect(write.mock.calls.map(([draft]) => draft.latex)).toEqual(["old", "new"]);
+  });
+  it("keeps the last selected source across queued source switches", async () => {
+    let release!: () => void;
+    const write = vi.fn().mockImplementationOnce(() => new Promise<void>(resolve => { release = resolve; })).mockResolvedValue(undefined);
+    const queue = new DraftQueue(write, vi.fn());
+    queue.schedule({ id:"a", source:"local", latex:"initial" });
+    const first = queue.flush(); await Promise.resolve();
+    queue.schedule({ id:"a", source:"api", latex:"api" });
+    queue.schedule({ id:"a", source:"local", latex:"local" });
+    queue.schedule({ id:"a", source:"api", latex:"api latest" });
+    release(); await first; await queue.flush();
+    expect(write.mock.calls.map(([draft]) => draft.latex)).toEqual(["initial", "local", "api latest"]);
+    expect(write.mock.calls[1][0].activate).toBe(false);
+  });
+  it("retrying an older failed source cannot reactivate it", async () => {
+    const write = vi.fn().mockRejectedValueOnce(Error("disk")).mockResolvedValue(undefined);
+    const queue = new DraftQueue(write, vi.fn());
+    queue.schedule({ id:"a", source:"local", latex:"local" });
+    queue.schedule({ id:"a", source:"api", latex:"api" });
+    expect(await queue.flush()).toBe(false);
+    expect(await queue.flush()).toBe(true);
+    expect(write.mock.calls[write.mock.calls.length - 1][0]).toMatchObject({ source:"local", activate:false });
+  });
 });

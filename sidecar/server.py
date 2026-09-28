@@ -11,6 +11,7 @@ import base64
 import io
 import json
 import os
+import re
 import sys
 import time
 import traceback
@@ -23,6 +24,55 @@ from typing import Any
 
 from gui.history import HistoryStore
 from .settings import SettingsStore, atomic_json
+
+
+RELEASE_API = "https://api.github.com/repos/haotian26/FormulaOCR/releases/latest"
+RELEASE_PAGE = "https://github.com/haotian26/FormulaOCR/releases"
+MAX_RELEASE_BYTES = 64 * 1024
+
+
+def _stable_version(value: Any) -> tuple[int, int, int]:
+    # GitHub's latest endpoint excludes prereleases. Reject ambiguous tags
+    # rather than guessing how to order them or constructing an unsafe URL.
+    if not isinstance(value, str) or len(value) > 64 or not re.fullmatch(r"v?(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)", value, re.ASCII):
+        raise ValueError("Release version must be a stable semantic version")
+    return tuple(int(part) for part in value.removeprefix("v").split("."))
+
+
+def check_for_updates(current: str, *, client_factory=None) -> dict[str, Any]:
+    current_version = _stable_version(current)
+    import httpx
+    factory = client_factory or httpx.Client
+    # This is reached only by the explicit user-triggered command. Never use
+    # credentials, cookies, redirects, proxy environment, or a caller URL.
+    try:
+        with factory(timeout=httpx.Timeout(10, connect=5), follow_redirects=False, trust_env=False) as client:
+            with client.stream("GET", RELEASE_API, headers={"Accept": "application/vnd.github+json", "User-Agent": "FormulaOCR-update-check"}) as response:
+                if response.status_code == 404:
+                    raise ValueError("No public stable release is available to check")
+                if response.status_code != 200:
+                    raise ValueError(f"Update check returned HTTP {response.status_code}")
+                body = bytearray()
+                deadline = time.monotonic() + 15
+                for chunk in response.iter_bytes(chunk_size=8192):
+                    if time.monotonic() > deadline:
+                        raise ValueError("Update check exceeded its time limit")
+                    if len(body) + len(chunk) > MAX_RELEASE_BYTES:
+                        raise ValueError("Release response exceeds the safe size limit")
+                    body.extend(chunk)
+        payload = json.loads(body)
+    except (httpx.HTTPError, UnicodeError, json.JSONDecodeError) as exc:
+        # Network error details may contain local proxy information. Return a
+        # fixed message rather than an upstream body, URL, or traceback.
+        raise ValueError("Cannot check for updates; check your network and try again") from exc
+    if not isinstance(payload, dict) or payload.get("draft") or payload.get("prerelease"):
+        raise ValueError("The release response is not a published stable release")
+    latest = payload.get("tag_name")
+    latest_version = _stable_version(latest)
+    url = payload.get("html_url")
+    if url != f"{RELEASE_PAGE}/tag/{latest}":
+        raise ValueError("The release response contains an unexpected destination")
+    return {"current": current, "latest": latest.removeprefix("v"), "update_available": latest_version > current_version, "url": url}
 
 
 def _json_value(value: Any) -> Any:
@@ -41,6 +91,7 @@ def _json_value(value: Any) -> Any:
 
 class Sidecar:
     def __init__(self) -> None:
+        self.session_id = uuid.uuid4().hex
         self.engine = None
         self.images: dict[str, bytes] = {}
         self.image_records: dict[str, str] = {}
@@ -104,7 +155,9 @@ class Sidecar:
 
     def dispatch(self, method: str, params: dict[str, Any]) -> Any:
         if method == "system.health":
-            return {"ok": True, "pid": os.getpid(), "protocol": 1}
+            return {"ok": True, "pid": os.getpid(), "protocol": 1, "session_id": self.session_id}
+        if method == "system.checkForUpdates":
+            return check_for_updates(str(params.get("current", "")))
         if method == "system.shutdown":
             self.close()
             return {"ok": True}
@@ -120,8 +173,23 @@ class Sidecar:
         if method == "image.open":
             raw = params.get("png_base64", "")
             image_id = str(params.get("image_id") or uuid.uuid4().hex)
-            self.images[image_id] = self._validated_image(base64.b64decode(raw, validate=True))
-            return {"image_id": image_id, "bytes": len(self.images[image_id])}
+            if not isinstance(raw, str) or len(raw) > 45 * 1024 * 1024 or not re.fullmatch(r"[A-Za-z0-9_-]{1,128}", image_id):
+                raise ValueError("Invalid image restore payload")
+            contents = self._validated_image(base64.b64decode(raw, validate=True))
+            history_id = params.get("history_id")
+            if history_id is not None:
+                if not isinstance(history_id, str):
+                    raise ValueError("history_id must be a string")
+                record = self.history.get(history_id)
+                if record is None:
+                    raise ValueError("history record not found")
+                if self._validated_image(Path(record.image_path).read_bytes()) != contents:
+                    raise ValueError("Restored image does not match its history record")
+            self.images[image_id] = contents
+            self.image_records.pop(image_id, None)
+            if history_id is not None:
+                self.image_records[image_id] = history_id
+            return {"image_id": image_id, "bytes": len(contents), "history_id": history_id, "session_id": self.session_id}
         if method == "image.openPath":
             path = self._validated_staged_path(str(params.get("path", "")))
             image_id = str(params.get("image_id") or uuid.uuid4().hex)
@@ -130,7 +198,7 @@ class Sidecar:
                 self.images[image_id] = self._validated_image(contents)
             finally:
                 path.unlink(missing_ok=True)
-            return {"image_id": image_id, "bytes": len(self.images[image_id])}
+            return {"image_id": image_id, "bytes": len(self.images[image_id]), "session_id": self.session_id}
         if method == "image.release":
             self.images.pop(str(params.get("image_id", "")), None)
             self.image_records.pop(str(params.get("image_id", "")), None)
@@ -292,7 +360,7 @@ class Sidecar:
             contents = self._validated_image(Path(record.image_path).read_bytes())
             self.images[image_id] = contents
             self.image_records[image_id] = record.id
-            return {"record": self._history_payload(record), "image_id": image_id, "png_base64": base64.b64encode(contents).decode("ascii")}
+            return {"record": self._history_payload(record), "image_id": image_id, "png_base64": base64.b64encode(contents).decode("ascii"), "session_id": self.session_id}
         if method == "history.list":
             records = [self._history_payload(record) for record in self.history.list_records()]
             return {"records": records}
@@ -524,7 +592,7 @@ def main() -> int:
                     respond(request)
                     break
                 method = str(request.get("method", ""))
-                executor = ocr_queue if method in {"ocr.preload", "ocr.recognize"} else api_queue if method.startswith("api.") else control_queue
+                executor = ocr_queue if method in {"ocr.preload", "ocr.recognize"} else api_queue if method.startswith("api.") or method == "system.checkForUpdates" else control_queue
                 executor.submit(respond, request)
     finally:
         try:

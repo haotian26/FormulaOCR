@@ -11,10 +11,11 @@ export CARGO_TARGET_DIR="$TAURI_TARGET_DIR"
 export CARGO_BUILD_JOBS=1
 export PATH="/opt/homebrew/opt/rustup/bin:$PATH"
 export RUSTUP_TOOLCHAIN="${FORMULAOCR_RUST_TOOLCHAIN:-1.88.0}"
-RUST_SYSROOT=$(rustc --print sysroot)
-RUST_LLD="$RUST_SYSROOT/lib/rustlib/aarch64-apple-darwin/bin/rust-lld"
-test -x "$RUST_LLD"
-export RUSTFLAGS="-C linker=$RUST_LLD ${RUSTFLAGS:-}"
+# Use Rust's default Apple linker driver so the selected macOS SDK and system
+# libraries are resolved together. Explicit caller RUSTFLAGS remain untouched.
+# Rust 1.88's release stripping can produce a misaligned LINKEDIT string pool
+# rejected by current macOS when loading build-time procedural macros.
+export CARGO_PROFILE_RELEASE_STRIP="${CARGO_PROFILE_RELEASE_STRIP:-none}"
 "$ROOT/node_modules/.bin/tauri" build --bundles app
 
 APP="$TAURI_TARGET_DIR/release/bundle/macos/FormulaOCR.app"

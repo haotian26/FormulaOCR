@@ -1,0 +1,20 @@
+.image-viewer { width: 100%; height: 100%; min-width: 0; min-height: 0; display: grid; grid-template-rows: auto minmax(0, 1fr); }
+.image-viewer-toolbar { display: flex; align-items: center; gap: 4px; padding: 4px 8px; color: #54545a; background: rgba(246, 246, 248, .94); }
+.image-viewer-toolbar button { border: 0; background: transparent; color: inherit; border-radius: 6px; padding: 3px 8px; min-height: 28px; font: inherit; font-size: 12px; cursor: pointer; }
+.image-viewer-toolbar button:hover:not(:disabled), .image-viewer-toolbar button[aria-pressed="true"] { background: rgba(0, 0, 0, .07); color: #1d1d1f; }
+.image-viewer-toolbar button:disabled { opacity: .4; cursor: default; }
+.image-viewer-toolbar .image-viewer-icon { display: inline-flex; align-items: center; justify-content: center; width: 28px; padding: 0; }
+.image-viewer-toolbar output { min-width: 44px; text-align: center; font-size: 12px; font-variant-numeric: tabular-nums; }
+.image-viewer-toolbar-spacer { flex: 1; }
+.image-viewer-viewport { position: relative; overflow: hidden; min-height: 0; min-width: 0; touch-action: none; }
+.image-viewer-viewport.can-pan { cursor: grab; }
+.image-viewer-viewport.is-dragging { cursor: grabbing; }
+.image-viewer-viewport:focus-visible, .image-viewer-toolbar button:focus-visible { outline: 2px solid #0a84ff; outline-offset: -2px; }
+.image-viewer .source-image.image-viewer-image { position: absolute; top: 50%; left: 50%; width: 100%; height: 100%; max-width: none; max-height: none; object-fit: contain; transform: translate(-50%, -50%); user-select: none; -webkit-user-drag: none; }
+.image-viewer .image-viewer-image.is-loaded { object-fit: fill; }
+.image-viewer-error { position: absolute; inset: 0; display: grid; place-items: center; padding: 16px; color: #8a4444; font-size: 13px; }
+@media (prefers-color-scheme: dark) {
+  .image-viewer-toolbar { color: #c4c4cb; background: rgba(38, 38, 41, .94); }
+  .image-viewer-toolbar button:hover:not(:disabled), .image-viewer-toolbar button[aria-pressed="true"] { background: rgba(255, 255, 255, .1); color: #f5f5f7; }
+  .image-viewer-error { color: #ffb4ae; }
+}

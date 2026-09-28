@@ -1,6 +1,38 @@
 export type AppLanguage = "zh-CN" | "en";
 
 const english: Record<string, string> = {
+  "图片查看工具": "Image controls",
+  "适合窗口": "Fit",
+  "实际大小": "Actual size",
+  "缩小图片": "Zoom out",
+  "放大图片": "Zoom in",
+  "图片缩放比例": "Image zoom",
+  "拖动或使用方向键平移图片": "Drag or use arrow keys to pan the image",
+  "图片无法显示": "Unable to display image",
+  "草稿尚未保存，请重试后继续": "Your draft has not been saved. Retry before continuing.",
+  "草稿尚未保存": "Draft not saved",
+  "退出会丢失未保存的编辑。可以重试保存，或取消退出。": "Quitting will lose unsaved edits. Retry saving or cancel quitting.",
+  "放弃并退出": "Discard and Quit",
+  "取消退出": "Cancel Quit",
+  "重试保存": "Retry Save",
+  "搜索历史": "Search history",
+  "搜索公式或配置": "Search formulas or profiles",
+  "没有匹配的记录": "No matching records",
+  "{count} 条记录": "{count} records",
+  "已导出 {count} 条记录": "Exported {count} records",
+  "导出所选": "Export Selected",
+  "导出结果": "Export Results",
+  "关于 FormulaOCR": "About FormulaOCR",
+  "离线公式识别 · MIT 开源许可": "Offline formula recognition · MIT license",
+  "仅点击检查时连接 GitHub，不自动下载或安装。": "Connects to GitHub only when you check. No automatic download or installation.",
+  "检查更新": "Check for Updates",
+  "正在检查…": "Checking…",
+  "查看新版本": "View New Version",
+  "查看发布说明": "Release Notes",
+  "发现新版本 {version}": "New version {version} is available",
+  "当前已是最新版本": "You are up to date",
+  "请先载入图片": "Load an image first",
+  "图片已切换，请重试": "The image changed. Please try again.",
   "请输入配置名称": "Enter a profile name",
   "请输入 HTTPS 地址；本机服务可使用 HTTP": "Enter an HTTPS URL; local services may use HTTP",
   "请输入模型 ID": "Enter a model ID",
@@ -151,6 +183,8 @@ const english: Record<string, string> = {
 };
 
 const englishErrorParts: Array<[string, string]> = [
+  ["请先载入图片", "Load an image first"],
+  ["图片已切换，请重试", "The image changed. Please try again."],
   ["远程 API 必须使用 HTTPS；HTTP 只允许本机地址", "Remote APIs must use HTTPS; HTTP is allowed only for local addresses"],
   ["API 请求失败", "API request failed"],
   ["未知网络错误", "unknown network error"],
@@ -168,6 +202,21 @@ const englishErrorParts: Array<[string, string]> = [
   ["无法暂存图片", "Unable to stage image"],
   ["无法建立图片暂存目录", "Unable to create image staging directory"],
 ];
+
+const chineseErrors: Record<string, string> = {
+  "Cannot check for updates; check your network and try again": "无法检查更新，请检查网络后重试",
+  "No public stable release is available to check": "目前没有可检查的公开稳定版本",
+  "Release version must be a stable semantic version": "发布版本号格式无效",
+  "Release response exceeds the safe size limit": "更新信息超出安全大小限制",
+  "Update check exceeded its time limit": "检查更新超时，请重试",
+  "The release response is not a published stable release": "返回的版本不是已发布的稳定版本",
+  "The release response contains an unexpected destination": "更新地址校验失败",
+  "Cannot open release page": "无法打开发布页面",
+  "Only the official FormulaOCR release page can be opened": "仅允许打开 FormulaOCR 官方发布页面",
+  "History export exceeds 10 MiB": "导出内容超过 10 MiB，请减少所选记录",
+  "Cannot open the export Save dialog": "无法打开导出保存窗口",
+  "The export Save dialog failed": "导出保存窗口出错，请重试",
+};
 
 export function translate(
   language: AppLanguage,
@@ -187,7 +236,7 @@ export function normalizeLanguage(value: unknown): AppLanguage {
 
 export function localizeError(language: AppLanguage, error: unknown): string {
   const original = error instanceof Error ? error.message : String(error);
-  if (language !== "en") return original;
+  if (language !== "en") return chineseErrors[original] || original.replace(/^Update check returned HTTP (\d+)$/, "检查更新失败（HTTP $1）");
   return englishErrorParts.reduce(
     (result, [source, replacement]) => result.replaceAll(source, replacement),
     original,

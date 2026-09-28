@@ -1,0 +1,273 @@
+{
+  "schema": 1,
+  "metric_policy": "raw-latex-conservative-v1",
+  "manifest_sha256": "d312bb5f8eea65c4dbcdb811d9274222969313ca7ab10e88def32e1d637bec16",
+  "backend_sha256": "cf81a4ab45a1eab8a04f7e15a37ef7a8acacc809bf9d81b2190e286c40e3c439",
+  "model_sha256": "5ef81a0b197ea2c8c1463b31c3eb2ad0ae1eb655fb1ff3b550858c7d85bc84e8",
+  "model_bytes": 735068718,
+  "model_load_seconds": 0.5610402910097037,
+  "environment": {
+    "python": "3.13.15",
+    "platform": "macOS-27.0-arm64-arm-64bit-Mach-O",
+    "onnxruntime": "1.29.0",
+    "numpy": "2.5.2",
+    "matplotlib": "3.11.2"
+  },
+  "records": [
+    {
+      "id": "fluoride",
+      "expected_latex": "F^{-}",
+      "image_sha256": "2912a8d0ef067734683363438b354674ee4dff979a8d7012aaf49ece1d20599e",
+      "preprocess_sha256": "6c3db543da8bcf6de42a968f0bb9f9f72794274a98f612411b4a9a9cad16f7c4",
+      "preprocess_shape": [
+        1,
+        1,
+        768,
+        768
+      ],
+      "raw_latex": "\\sim",
+      "elapsed_ms": 754.7774580016267,
+      "scores": {
+        "exact": false,
+        "charges": false,
+        "subscripts": true,
+        "superscripts": false,
+        "elements": false
+      }
+    },
+    {
+      "id": "hf_standard",
+      "expected_latex": "HF^{\\circ}",
+      "image_sha256": "7da8e1c105fc4646d75315bd73018a5df7f7c551c08727fd2413aaf2672bcbc7",
+      "preprocess_sha256": "d7e58a44fcec688433dd2281352949a5be37d3cd0ae2f7a5b52a288d3d41bc1c",
+      "preprocess_shape": [
+        1,
+        1,
+        768,
+        768
+      ],
+      "raw_latex": " \u5176\u4e2d\u5fc3\u70b9  $\\mathrm { H F } ^ { \\prime }$  \u7684\u503c\u548c\u503c\u70b9",
+      "elapsed_ms": 742.1352079836652,
+      "scores": {
+        "exact": false,
+        "charges": true,
+        "subscripts": true,
+        "superscripts": false,
+        "elements": true
+      }
+    },
+    {
+      "id": "hf_zero",
+      "expected_latex": "HF^{0}",
+      "image_sha256": "0920e37822ae48b2db1771b448d232cda544c019ec913f39ea8a81698a5d4295",
+      "preprocess_sha256": "193466ef9473eead40887464753ec026d1feeded407f13c7988f852f12eab1ba",
+      "preprocess_shape": [
+        1,
+        1,
+        768,
+        768
+      ],
+      "raw_latex": "\\textcircled{5}  \\{ \\frac { 1 } { 2 } \\} \\{ \\frac { 1 } { 2 } \\} \\quad \\textcircled{5}  \\{ \\frac { 1 } { 2 } \\} \\{ \\frac { 1 } { 2 } \\} .",
+      "elapsed_ms": 868.843125004787,
+      "scores": {
+        "exact": false,
+        "charges": true,
+        "subscripts": true,
+        "superscripts": false,
+        "elements": false
+      }
+    },
+    {
+      "id": "nd_fluoride",
+      "expected_latex": "NdF_{3}=Nd^{3+}+3F^{-}",
+      "image_sha256": "23b5a321ce599578129d6e2a25c65f98ccd9b0e53f7ba9fbc6b9f9e7729ca771",
+      "preprocess_sha256": "f3b4bd3ec002112c77167ee014a790cb8b7b5246c0c6801883bc8a682d7239f8",
+      "preprocess_shape": [
+        1,
+        1,
+        768,
+        768
+      ],
+      "raw_latex": "\\mathrm { N d F _ { 3 } = N d ^ { 3 + } + 3 F ^ { - } }",
+      "elapsed_ms": 652.0102499925997,
+      "scores": {
+        "exact": true,
+        "charges": true,
+        "subscripts": true,
+        "superscripts": true,
+        "elements": true
+      }
+    },
+    {
+      "id": "sulfate_complex",
+      "expected_latex": "Nd^{3+}+2SO_{4}^{2-}=Nd(SO_{4})_{2}^{-}",
+      "image_sha256": "5af491db8ea1a1ab37cb45868081a144e47258b561bbb563d9f231d1ea5e10a4",
+      "preprocess_sha256": "1eb8d100c46d896d30779f1e7a3b829954c0c76b2b1a889a6dbcc7cad387eeec",
+      "preprocess_shape": [
+        1,
+        1,
+        768,
+        768
+      ],
+      "raw_latex": "\\mathrm { N d } ^ { 3   + }   + 2 \\mathrm { S O } _ { 4 } ^ { 2   - } = \\mathrm { N d } ( \\mathrm { S O } _ { 4 } ) _ { 2 } ^ { - }",
+      "elapsed_ms": 892.0727079967037,
+      "scores": {
+        "exact": true,
+        "charges": true,
+        "subscripts": true,
+        "superscripts": true,
+        "elements": true
+      }
+    },
+    {
+      "id": "chloride_case",
+      "expected_latex": "Cl^{-}+Na^{+}=NaCl",
+      "image_sha256": "4b80224d0e71d0bf2466652965f1eff043de1fe67fa8c6fb6d879986e8caa9f2",
+      "preprocess_sha256": "8bfbf70f825195e1a9d36a4d48b42c501619cf14b6ebb6eaeb6cc081ede0614e",
+      "preprocess_shape": [
+        1,
+        1,
+        768,
+        768
+      ],
+      "raw_latex": "\\mathrm{Cl^{-}+Na^{+}\\xlongequal{}NaCl}",
+      "elapsed_ms": 602.505208022194,
+      "scores": {
+        "exact": false,
+        "charges": true,
+        "subscripts": true,
+        "superscripts": true,
+        "elements": true
+      }
+    },
+    {
+      "id": "water_subscript",
+      "expected_latex": "H_{2}O",
+      "image_sha256": "3499750b0c7b415888a22f7c999dd09d97784d66e6d7a138822cf18d6c44291e",
+      "preprocess_sha256": "c626b63bf72408f9a520ca7e742356e122f40df6fa7b2c7b9c38a98d9a9fcab9",
+      "preprocess_shape": [
+        1,
+        1,
+        768,
+        768
+      ],
+      "raw_latex": " \u5176\u4e2d , $\\mathrm { H _ { 2 } O }$  \u7684\u503c\u548c\u503c",
+      "elapsed_ms": 663.3464170154184,
+      "scores": {
+        "exact": false,
+        "charges": true,
+        "subscripts": true,
+        "superscripts": true,
+        "elements": true
+      }
+    },
+    {
+      "id": "quadratic",
+      "expected_latex": "x^{2}+2x+1=0",
+      "image_sha256": "405a384e875d7d1813b1cecd53913b9285e5ff03a9d9b8a0cced56a265048476",
+      "preprocess_sha256": "7bb8c5f4a97d55ab4b99f19ecea4a5af7a6444f2808151e0d2516580bb3a8fd0",
+      "preprocess_shape": [
+        1,
+        1,
+        768,
+        768
+      ],
+      "raw_latex": "x ^ { 2 } + 2 x + 1 = 0",
+      "elapsed_ms": 618.7721669848543,
+      "scores": {
+        "exact": true,
+        "charges": true,
+        "subscripts": true,
+        "superscripts": true,
+        "elements": null
+      }
+    },
+    {
+      "id": "fraction",
+      "expected_latex": "\\frac{a+b}{c-d}",
+      "image_sha256": "62f8cdc0358bacf13a5bd2fa43eb81daf60f01280b96311967b6696a463f755e",
+      "preprocess_sha256": "2cee3d5616cf122828f79eee1a8ce25f8668e950e79d9f4c70a0f07543ff087e",
+      "preprocess_shape": [
+        1,
+        1,
+        768,
+        768
+      ],
+      "raw_latex": "\\frac { a + b } { c - d } = \\frac { 1 } { 2 }",
+      "elapsed_ms": 626.4842920063529,
+      "scores": {
+        "exact": false,
+        "charges": true,
+        "subscripts": true,
+        "superscripts": true,
+        "elements": null
+      }
+    },
+    {
+      "id": "log_equilibrium",
+      "expected_latex": "\\log K=-\\frac{\\Delta G}{RT}",
+      "image_sha256": "3cf5cd14aa58c7f4369ca1329492d77271bacca0a67ae9ce72ee549e04f47e8b",
+      "preprocess_sha256": "8f5ea13105cfcad8d2e671c63684ac62a8acc3ce4aa4e3a204da402964ee89f4",
+      "preprocess_shape": [
+        1,
+        1,
+        768,
+        768
+      ],
+      "raw_latex": "\\begin{array} { r } { \\log K = - \\frac { \\Delta G } { R T } } \\end{array}",
+      "elapsed_ms": 655.7634170167148,
+      "scores": {
+        "exact": false,
+        "charges": true,
+        "subscripts": true,
+        "superscripts": true,
+        "elements": null
+      }
+    }
+  ],
+  "summary": {
+    "exact": {
+      "correct": 3,
+      "total": 10,
+      "fraction": 0.3
+    },
+    "charges": {
+      "correct": 9,
+      "total": 10,
+      "fraction": 0.9,
+      "reference_feature_present": {
+        "correct": 3,
+        "total": 4,
+        "fraction": 0.75
+      }
+    },
+    "subscripts": {
+      "correct": 10,
+      "total": 10,
+      "fraction": 1.0,
+      "reference_feature_present": {
+        "correct": 3,
+        "total": 3,
+        "fraction": 1.0
+      }
+    },
+    "superscripts": {
+      "correct": 7,
+      "total": 10,
+      "fraction": 0.7,
+      "reference_feature_present": {
+        "correct": 4,
+        "total": 7,
+        "fraction": 0.5714285714285714
+      }
+    },
+    "elements": {
+      "correct": 5,
+      "total": 7,
+      "fraction": 0.7142857142857143
+    },
+    "errors": 0
+  },
+  "recorded_date": "2026-09-28",
+  "scope": "10 original synthetic images, visually checked against explicit manifest labels; not representative production accuracy."
+}

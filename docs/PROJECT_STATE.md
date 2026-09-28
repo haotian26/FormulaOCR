@@ -1,6 +1,7 @@
 # FormulaOCR — current state
 
-Version: **0.4.1**
+Development version: **0.4.2** (local verification; not published)
+Latest public release: **0.4.1**
 
 Platform: Apple Silicon, macOS 14 or newer
 
@@ -14,6 +15,27 @@ License: MIT (third-party components retain their own licenses)
 - Chinese/English interface; independent, per-page settings drafts.
 - Optional OpenAI-compatible and Mathpix profiles; API recognition is manual.
 - Existing history, settings and Keychain credentials are preserved.
+- Fit/actual-size image zoom and pan, history search and LaTeX export.
+- Manual GitHub update check under General → About; no background update traffic.
+
+## 0.4.2 work
+
+Failed draft writes remain queued and block quit unless explicitly discarded.
+Mode changes preserve manual input and ignore outdated formatting responses.
+API profile edits invalidate in-flight test/model responses. Current images can
+be rehydrated after a sidecar restart without replaying a paid recognition call.
+
+The production model and preprocessing are unchanged. A separate INT8 trial
+created a smaller file but failed to load; it must not be bundled. See
+[MODEL_SIZE_EXPERIMENT.md](MODEL_SIZE_EXPERIMENT.md) for the labelled baseline,
+measurement definitions and rejected candidate.
+
+The CI workflow is prepared locally, including native fault tests and an
+opt-in model benchmark. It is not active on GitHub until explicitly pushed
+with workflow permission. This development update does not create a Release.
+
+Local acceptance and remaining limitations are recorded in
+[REVIEW_0.4.2.md](REVIEW_0.4.2.md).
 
 ## 0.4.1 review
 

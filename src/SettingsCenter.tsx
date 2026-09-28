@@ -9,6 +9,7 @@ import { translate, normalizeLanguage, localizeError, type AppLanguage } from ".
 import { recordedShortcut } from "./state";
 import { useTauriEvent } from "./hooks";
 import { defaults, type Settings, type RecognitionMode, type Profile } from "./types";
+import { AboutPanel } from "./AboutPanel";
 
 function HotkeyRecorder({
   value,
@@ -130,7 +131,12 @@ export function SettingsCenter({
   selectedRef.current = selectedId;
   const feedbackTimer = useRef<ReturnType<typeof setTimeout>>();
   useEffect(() => () => clearTimeout(feedbackTimer.current), []);
-  useEffect(() => { requestVersion.current++; setModels([]); setBusy(false); setError(""); setFeedback(""); }, [selectedId]);
+  useEffect(() => {
+    requestVersion.current++;
+    clearTimeout(feedbackTimer.current);
+    setModels([]); setBusy(false); setError(""); setFeedback("");
+    return () => { requestVersion.current++; };
+  }, [selectedId]);
   useEffect(() => { setError(""); setFeedback(""); }, [page]);
 
   const [feedback, setFeedback] = useState("");
@@ -346,12 +352,18 @@ export function SettingsCenter({
       setError(localizeError(language, caught));
     } finally { setSaving(false); }
   };
-  const patchProfile = (patch: Partial<Profile>) =>
+  const patchProfile = (patch: Partial<Profile>) => {
+    // A pending response belongs to the exact inputs that started it, not just
+    // the profile ID. Invalidate synchronously before accepting any field edit.
+    requestVersion.current++;
+    clearTimeout(feedbackTimer.current);
+    setModels([]); setBusy(false); setError(""); setFeedback("");
     setProfiles((items) =>
       items.map((profile) =>
         profile.id === selectedId ? { ...profile, ...patch } : profile,
       ),
     );
+  };
   const fetchModels = async () => {
     if (!selected) return;
     const version = ++requestVersion.current;
@@ -493,6 +505,7 @@ export function SettingsCenter({
                   <option value="math">{t("数学")}</option>
                 </select>
               </label>
+              <AboutPanel language={language} />
             </div>
           )}
           {page === "界面与布局" && (

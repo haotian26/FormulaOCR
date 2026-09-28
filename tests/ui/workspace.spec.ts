@@ -9,6 +9,8 @@ async function boot(page: Page, language = "en", settings = false, autoCopy = fa
     const listeners = new Map<string, number[]>();
     const w = window as any;
     w.testCalls = [];
+    w.testPNG = png;
+    w.testOverrides = {};
     w.testPending = new Map<string, (value: any) => void>();
     w.testConversions = [];
     w.testEmit = (event: string, payload: any) => (listeners.get(event) || []).forEach(id => callbacks.get(id)?.({ event, payload }));
@@ -29,10 +31,12 @@ async function boot(page: Page, language = "en", settings = false, autoCopy = fa
         if (command !== "sidecar_request") return null;
         const { id, method, params } = args.request;
         let result: any = {};
+        if (w.testOverrides[method]) return { id, ok:true, result:await w.testOverrides[method](params) };
         if (method === "settings.get") result = { language, auto_copy: autoCopy, hide_dock_on_close: true, hotkey: "", history_limit: 200, default_recognition_mode: "chemistry", layout_restore_mode: "remember_window_history_closed" };
         if (method === "profiles.list") result = { api_enabled: true, active_profile_id: "test", profiles: [{ id: "test", name: "A very long API configuration name", provider_type: "openai_compatible", base_url: "https://example.org/v1", model: "example-vision", timeout_s: 45, enabled: true }] };
         if (method === "history.list") result = { records: [] };
         if (method === "ocr.preload") result = { loaded: true, elapsed_ms: 15 };
+        if (method === "ocr.format") result = { formatted_latex: params.latex };
         if (method === "image.openPath") result = { image_id: "image-" + serial++ };
         if (method === "ocr.recognize" || method === "api.recognize") result = await new Promise(resolve => w.testPending.set(method, resolve));
         if (method === "conversion.toMathML") {
@@ -112,6 +116,92 @@ test("image appears before OCR, API cannot overwrite a newer image, Undo stays w
   await page.evaluate(() => (window as any).testPending.get("ocr.recognize")({ raw_latex:"y^2", formatted_latex:"y^2" }));
   await expect(page.locator(".cm-content")).toHaveText("y^2");
   await expect(page.getByTitle("Undo", { exact:true })).toBeDisabled();
+});
+
+test("manual LaTeX survives mode changes and late formatting cannot overwrite an edit", async ({ page }) => {
+  await boot(page);
+  page.on("dialog", dialog => dialog.accept());
+  const editor = page.locator(".cm-content");
+  await editor.fill("x^2");
+  await page.getByRole("button", { name:"Math", exact:true }).click();
+  await expect(editor).toHaveText("x^2");
+  await expect(page.locator(".mode-selector button.active")).toHaveText("Math");
+  await page.evaluate(() => {
+    const w = window as any;
+    w.testOverrides["ocr.format"] = () => new Promise(resolve => w.testPending.set("format", resolve));
+  });
+  await page.getByRole("button", { name:"Chemistry", exact:true }).click();
+  await expect.poll(() => page.evaluate(() => (window as any).testPending.has("format"))).toBe(true);
+  await editor.fill("x^3");
+  await page.evaluate(() => (window as any).testPending.get("format")({ formatted_latex:"OLD" }));
+  await expect(page.getByRole("button", { name:"Open", exact:true })).toBeEnabled();
+  await expect(editor).toHaveText("x^3");
+  await expect(page.getByTitle("Undo", { exact:true })).toBeEnabled();
+});
+
+test("editing during mode metadata save keeps the newest persistent draft", async ({ page }) => {
+  await boot(page);
+  await page.getByRole("button", { name:"Paste", exact:true }).click();
+  await expect.poll(() => page.evaluate(() => (window as any).testPending.has("ocr.recognize"))).toBe(true);
+  await page.evaluate(() => {
+    const w = window as any;
+    w.testOverrides["history.setMode"] = () => new Promise(resolve => w.testPending.set("mode", resolve));
+    w.testPending.get("ocr.recognize")({ raw_latex:"x^2", formatted_latex:"x^2", history_id:"saved-record" });
+  });
+  await expect(page.locator(".cm-content")).toHaveText("x^2");
+  await page.getByRole("button", { name:"Math", exact:true }).click();
+  await expect.poll(() => page.evaluate(() => (window as any).testPending.has("mode"))).toBe(true);
+  await page.locator(".cm-content").fill("x^3");
+  await page.evaluate(() => (window as any).testPending.get("mode")({}));
+  await expect(page.getByRole("button", { name:"Open", exact:true })).toBeEnabled();
+  await page.evaluate(() => (window as any).testEmit("formulaocr://quit-requested", null));
+  await expect.poll(() => page.evaluate(() => (window as any).testCalls.some((call: any) => call.command === "complete_quit"))).toBe(true);
+  const writes = await page.evaluate(() => (window as any).testCalls.filter((call: any) => call.args?.request?.method === "history.updateDraft").map((call: any) => call.args.request.params.latex));
+  expect(writes.at(-1)).toBe("x^3");
+  await expect(page.locator(".cm-content")).toHaveText("x^3");
+});
+
+test("failed history save blocks quit, preserves the draft, and retries", async ({ page }) => {
+  await boot(page);
+  await page.getByRole("button", { name:"Paste", exact:true }).click();
+  await expect.poll(() => page.evaluate(() => (window as any).testPending.has("ocr.recognize"))).toBe(true);
+  await page.evaluate(() => {
+    const w = window as any;
+    w.testOverrides["history.updateDraft"] = async () => { throw Error("Disk full"); };
+    w.testPending.get("ocr.recognize")({ raw_latex:"x^2", formatted_latex:"x^2", history_id:"saved-record" });
+  });
+  await expect(page.locator(".cm-content")).toHaveText("x^2");
+  await page.locator(".cm-content").fill("x^3");
+  await page.evaluate(() => (window as any).testEmit("formulaocr://quit-requested", null));
+  await expect(page.getByRole("alertdialog")).toBeVisible();
+  expect(await page.evaluate(() => (window as any).testCalls.some((call: any) => call.command === "complete_quit"))).toBe(false);
+  await page.getByRole("button", { name:"Cancel Quit", exact:true }).click();
+  await expect(page.locator(".cm-content")).toHaveText("x^3");
+  await page.evaluate(() => { const w = window as any; w.testOverrides["history.updateDraft"] = async () => ({}); w.testEmit("formulaocr://quit-requested", null); });
+  await expect.poll(() => page.evaluate(() => (window as any).testCalls.some((call: any) => call.command === "complete_quit"))).toBe(true);
+  const writes = await page.evaluate(() => (window as any).testCalls.filter((call: any) => call.args?.request?.method === "history.updateDraft").map((call: any) => call.args.request.params.latex));
+  expect(writes.length).toBeGreaterThanOrEqual(2);
+  expect(writes.every((value: string) => value === "x^3")).toBe(true);
+});
+
+test("history search and export preserve the selected active-source draft", async ({ page }) => {
+  await boot(page);
+  await page.evaluate(() => {
+    const w = window as any;
+    const records = [
+      { id:"one", created_at:1, updated_at:1, local_raw_latex:"NaCl", local_draft_latex:"NaCl", active_source:"local" },
+      { id:"two", created_at:2, updated_at:2, local_raw_latex:"HF", local_draft_latex:"HF", api_draft_latex:"HF^{\\circ}", api_profile_name:"Chemistry API", active_source:"api", has_api:true },
+    ];
+    w.testOverrides["history.list"] = async () => ({ records });
+  });
+  await page.getByRole("button", { name:"History", exact:true }).click();
+  await expect(page.locator(".history-item")).toHaveCount(2);
+  await page.getByRole("searchbox", { name:"Search history" }).fill("chemistry");
+  await expect(page.locator(".history-item")).toHaveCount(1);
+  await page.getByRole("button", { name:"Export Results" }).click();
+  await expect.poll(() => page.evaluate(() => (window as any).testCalls.some((call: any) => call.command === "export_history_tex"))).toBe(true);
+  const text = await page.evaluate(() => (window as any).testCalls.find((call: any) => call.command === "export_history_tex").args.text);
+  expect(text).toContain("HF^{\\circ}"); expect(text).not.toContain("NaCl");
 });
 
 test("late automatic Word conversion cannot copy a previous image", async ({ page }) => {

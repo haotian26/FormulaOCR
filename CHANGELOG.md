@@ -2,6 +2,28 @@
 
 ## [Unreleased]
 
+### 0.4.2 — 中文
+
+- 保存失败的历史草稿保留并可重试；退出前提供重试、取消和明确放弃选项。
+- 模式切换保留手动输入与撤销记录，迟到的排版结果不覆盖新编辑。
+- 编辑 API 配置后，旧测试结果和模型列表不再混入新配置。
+- 后台进程重启后可重新载入当前图片；不会自动重复收费 API 请求。
+- 原图支持适合窗口、100%、缩放、拖动与键盘平移。
+- 历史支持搜索和导出当前来源的 LaTeX 草稿。
+- 常规设置增加关于与手动检查更新，不后台联网或自动安装。
+- 新增标注基准、故障测试和独立量化试验；正式 L 模型与预处理保持不变。
+
+### 0.4.2 — English
+
+- Retain failed history drafts for retry and offer Retry, Cancel or explicit Discard before quitting.
+- Preserve manually entered LaTeX and Undo across mode changes; ignore outdated formatting results.
+- Invalidate API test feedback and model lists when the tested profile is edited.
+- Restore the current image after a backend restart without replaying billable API requests.
+- Add Fit, actual size, zoom, drag and keyboard panning for source images.
+- Search history and export the active-source LaTeX drafts to a chosen file.
+- Add About and manual update checks, with no background network access or automatic installation.
+- Add a labelled benchmark, fault tests and an isolated quantization experiment; keep the production model and preprocessing unchanged.
+
 ## [0.4.1] - 2026-09-08
 
 ### 中文

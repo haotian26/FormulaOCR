@@ -1,0 +1,38 @@
+{
+  "schema": 1,
+  "model_sha256": "5ef81a0b197ea2c8c1463b31c3eb2ad0ae1eb655fb1ff3b550858c7d85bc84e8",
+  "source_bytes": 735068718,
+  "platform": "macOS-27.0-arm64-arm-64bit-Mach-O",
+  "python": "3.13.15",
+  "limits": {
+    "wall_seconds": 180.0,
+    "rss_mib": 6144,
+    "log_mib": 16
+  },
+  "production_model_changed": false,
+  "candidate_approved": false,
+  "accuracy": "NOT TESTED; run the separate labelled benchmark before considering a candidate",
+  "process": {
+    "returncode": 1,
+    "termination_reason": null,
+    "elapsed_seconds": 8.519,
+    "sampled_peak_rss_mib": 3482.3
+  },
+  "worker": {
+    "schema": 1,
+    "method": "dynamic-int8-constant-MatMul-subgraphs",
+    "training": false,
+    "onnx": "1.23.0",
+    "onnxruntime": "1.29.0",
+    "quantization": "completed",
+    "error_type": "Fail",
+    "error": "[ONNXRuntimeError] : 1 : FAIL : Load model from <isolated-experiment>/candidate.onnx failed:This is an invalid model. Error: the graph is not acyclic.",
+    "cpu_load": "not_passed",
+    "elapsed_seconds": 7.675993791985093
+  },
+  "candidate_bytes": 299131313,
+  "candidate_sha256": "0163a331999bd14f7dbc79e0ffaa35629605e816a67e5bad0c88a7673e230287",
+  "size_reduction_fraction": 0.593056668478715,
+  "completed": false,
+  "recorded_date": "2026-09-28"
+}

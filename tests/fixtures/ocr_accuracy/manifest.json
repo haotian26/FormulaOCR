@@ -1,0 +1,17 @@
+{
+  "schema": 1,
+  "provenance": "Original synthetic formulas authored for FormulaOCR; no user screenshots, history, source-paper images, or training data. Expected labels were written explicitly before inference. Mathtext is solely an image generator, never the accuracy judge.",
+  "coverage_limit": "Small deterministic smoke benchmark, not representative validation of real screenshots, handwriting, matrices, or all scientific notation. A passing comparison does not authorize deployment.",
+  "cases": [
+    {"id": "fluoride", "chemistry": true, "synthetic_mathtext": "\\mathrm{F}^{-}", "expected_latex": "F^{-}"},
+    {"id": "hf_standard", "chemistry": true, "synthetic_mathtext": "\\mathrm{HF}^{\\circ}", "expected_latex": "HF^{\\circ}"},
+    {"id": "hf_zero", "chemistry": true, "synthetic_mathtext": "\\mathrm{HF}^{0}", "expected_latex": "HF^{0}"},
+    {"id": "nd_fluoride", "chemistry": true, "synthetic_mathtext": "\\mathrm{NdF}_{3}=\\mathrm{Nd}^{3+}+3\\mathrm{F}^{-}", "expected_latex": "NdF_{3}=Nd^{3+}+3F^{-}"},
+    {"id": "sulfate_complex", "chemistry": true, "synthetic_mathtext": "\\mathrm{Nd}^{3+}+2\\mathrm{SO}_{4}^{2-}=\\mathrm{Nd}(\\mathrm{SO}_{4})_{2}^{-}", "expected_latex": "Nd^{3+}+2SO_{4}^{2-}=Nd(SO_{4})_{2}^{-}"},
+    {"id": "chloride_case", "chemistry": true, "synthetic_mathtext": "\\mathrm{Cl}^{-}+\\mathrm{Na}^{+}=\\mathrm{NaCl}", "expected_latex": "Cl^{-}+Na^{+}=NaCl"},
+    {"id": "water_subscript", "chemistry": true, "synthetic_mathtext": "\\mathrm{H}_{2}\\mathrm{O}", "expected_latex": "H_{2}O"},
+    {"id": "quadratic", "synthetic_mathtext": "x^{2}+2x+1=0", "expected_latex": "x^{2}+2x+1=0"},
+    {"id": "fraction", "synthetic_mathtext": "\\frac{a+b}{c-d}", "expected_latex": "\\frac{a+b}{c-d}"},
+    {"id": "log_equilibrium", "synthetic_mathtext": "\\log K=-\\frac{\\Delta G}{RT}", "expected_latex": "\\log K=-\\frac{\\Delta G}{RT}"}
+  ]
+}

@@ -1,7 +1,7 @@
 use serde_json::Value;
-use std::io::{BufRead, BufReader, Write};
+use std::io::{BufRead, BufReader, Read, Write};
 use std::process::{Child, ChildStdin, Command, Stdio};
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
 use std::sync::{mpsc, Arc, Mutex};
 use std::thread;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -302,10 +302,48 @@ struct Bridge {
     child: Arc<Mutex<Child>>,
     stdin: Arc<Mutex<ChildStdin>>,
     pending: Arc<Mutex<HashMap<String, mpsc::Sender<Result<Value, String>>>>>,
+    diagnostics: Diagnostics,
+}
+
+type Diagnostics = Arc<Mutex<VecDeque<String>>>;
+type PendingResponses = Arc<Mutex<HashMap<String, mpsc::Sender<Result<Value, String>>>>>;
+fn record_diagnostic(diagnostics: &Diagnostics, event: &'static str) {
+    // Only fixed, reviewed events are accepted. Never retain raw stderr,
+    // requests, URLs, model output, image data, credentials or local paths.
+    if let Ok(mut events) = diagnostics.lock() {
+        if events.back().map(String::as_str) != Some(event) { events.push_back(event.to_string()); }
+        while events.len() > 16 { events.pop_front(); }
+    }
+}
+
+fn read_responses(mut stdout: impl BufRead, pending: &PendingResponses, diagnostics: &Diagnostics) {
+    let mut line = String::new();
+    loop {
+        line.clear();
+        match stdout.read_line(&mut line) {
+            Ok(0) | Err(_) => { record_diagnostic(diagnostics, "Sidecar response stream ended"); break; },
+            Ok(_) => {
+                let parsed = serde_json::from_str::<Value>(line.trim());
+                let valid = parsed.as_ref().ok().filter(|value| value["id"].is_string() && value["ok"].is_boolean());
+                if valid.is_none() {
+                    record_diagnostic(diagnostics, "Sidecar returned invalid protocol data");
+                    break;
+                }
+                let response = parsed.unwrap();
+                let id = response["id"].as_str().unwrap();
+                if let Ok(mut waiters) = pending.lock() {
+                    if let Some(waiter) = waiters.remove(id) { let _ = waiter.send(Ok(response)); }
+                }
+            }
+        }
+    }
+    if let Ok(mut waiters) = pending.lock() {
+        for (_, waiter) in waiters.drain() { let _ = waiter.send(Err("Sidecar response stream failed or exited".into())); }
+    }
 }
 
 impl Bridge {
-    fn spawn() -> Result<Self, String> {
+    fn spawn(diagnostics: Diagnostics) -> Result<Self, String> {
         let packaged_sidecar = std::env::current_exe()
             .ok()
             .and_then(|path| path.parent().map(|parent| parent.join("../Resources/formulaocr-sidecar/formulaocr-sidecar")))
@@ -344,34 +382,38 @@ impl Bridge {
         let mut child = command
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
-            .stderr(Stdio::null())
+            .stderr(Stdio::piped())
             .spawn()
             .map_err(|error| format!("无法启动 FormulaOCR sidecar: {error}"))?;
         let stdin = Arc::new(Mutex::new(child.stdin.take().ok_or("sidecar stdin unavailable")?));
         let stdout = child.stdout.take().ok_or("sidecar stdout unavailable")?;
-        let pending: Arc<Mutex<HashMap<String, mpsc::Sender<Result<Value, String>>>>> = Arc::new(Mutex::new(HashMap::new()));
-        let reader_pending = Arc::clone(&pending);
-        thread::Builder::new().name("formulaocr-sidecar-reader".into()).spawn(move || {
-            let mut stdout = BufReader::new(stdout);
-            let mut line = String::new();
+        let stderr = child.stderr.take().ok_or("sidecar stderr unavailable")?;
+        let stderr_diagnostics = Arc::clone(&diagnostics);
+        if let Err(error) = thread::Builder::new().name("formulaocr-sidecar-diagnostics".into()).spawn(move || {
+            let mut stderr = stderr;
+            let mut buffer = [0_u8; 4096];
             loop {
-                line.clear();
-                match stdout.read_line(&mut line) {
+                match stderr.read(&mut buffer) {
                     Ok(0) | Err(_) => break,
-                    Ok(_) => {
-                        let parsed = serde_json::from_str::<Value>(line.trim()).map_err(|error| format!("sidecar 返回无效 JSON: {error}"));
-                        let id = parsed.as_ref().ok().and_then(|value| value.get("id")).and_then(Value::as_str).unwrap_or("").to_string();
-                        if let Ok(mut waiters) = reader_pending.lock() {
-                            if let Some(waiter) = waiters.remove(&id) { let _ = waiter.send(parsed); }
-                        }
-                    }
+                    Ok(_) => record_diagnostic(&stderr_diagnostics, "Sidecar wrote diagnostic output (contents suppressed)"),
                 }
             }
-            if let Ok(mut waiters) = reader_pending.lock() {
-                for (_, waiter) in waiters.drain() { let _ = waiter.send(Err("sidecar 已退出".into())); }
-            }
-        }).map_err(|error| format!("无法启动 sidecar 响应线程: {error}"))?;
-        Ok(Self { child: Arc::new(Mutex::new(child)), stdin, pending })
+        }) {
+            let _ = child.kill(); let _ = child.wait();
+            return Err(format!("Unable to supervise sidecar diagnostics: {error}"));
+        }
+        let pending: Arc<Mutex<HashMap<String, mpsc::Sender<Result<Value, String>>>>> = Arc::new(Mutex::new(HashMap::new()));
+        let reader_pending = Arc::clone(&pending);
+        let reader_diagnostics = Arc::clone(&diagnostics);
+        let reader = thread::Builder::new().name("formulaocr-sidecar-reader".into()).spawn(move || {
+            read_responses(BufReader::new(stdout), &reader_pending, &reader_diagnostics);
+        });
+        if let Err(error) = reader {
+            let _ = child.kill(); let _ = child.wait();
+            return Err(format!("无法启动 sidecar 响应线程: {error}"));
+        }
+        record_diagnostic(&diagnostics, "Sidecar session started");
+        Ok(Self { child: Arc::new(Mutex::new(child)), stdin, pending, diagnostics })
     }
 
     fn request(&self, request: &Value) -> Result<Value, String> {
@@ -388,13 +430,24 @@ impl Bridge {
             stdin.flush().map_err(|e| e.to_string())
         })();
         if let Err(error) = write_result {
+            record_diagnostic(&self.diagnostics, "Sidecar request transport failed");
             let _ = self.pending.lock().map(|mut waiters| waiters.remove(&id));
             return Err(error);
         }
         let timeout = if request["method"] == "system.shutdown" { 3 } else { 260 };
         let result = receiver.recv_timeout(Duration::from_secs(timeout)).map_err(|_| "sidecar response timed out or disconnected".to_string());
-        if result.is_err() { let _ = self.pending.lock().map(|mut waiters| waiters.remove(&id)); }
+        if result.is_err() {
+            record_diagnostic(&self.diagnostics, "Sidecar response timed out or disconnected");
+            let _ = self.pending.lock().map(|mut waiters| waiters.remove(&id));
+        }
         result?
+    }
+
+    fn terminate(&self) {
+        if let Ok(mut child) = self.child.lock() {
+            if child.try_wait().ok().flatten().is_none() { let _ = child.kill(); }
+            let _ = child.wait();
+        }
     }
 }
 
@@ -407,7 +460,7 @@ impl Drop for Bridge {
     }
 }
 
-struct AppState(Arc<Mutex<Option<Arc<Bridge>>>>);
+struct AppState(Arc<Mutex<Option<Arc<Bridge>>>>, Diagnostics);
 struct HotkeyState(Mutex<String>);
 #[derive(Default)]
 struct Lifecycle { requested: AtomicBool, finished: AtomicBool, recording: AtomicBool, capturing: AtomicBool }
@@ -422,18 +475,24 @@ async fn sidecar_request(state: tauri::State<'_, AppState>, request: Value) -> R
     // Model inference and JSON-lines reads are blocking work. Running them in
     // a blocking worker keeps the Tauri/WebKit event loop free so React can
     // paint the selected image while OCR is still running.
+    let diagnostics = Arc::clone(&state.1);
     let state = Arc::clone(&state.0);
     tauri::async_runtime::spawn_blocking(move || {
         let instance = {
             let mut bridge = state.lock().map_err(|_| "sidecar 状态锁定失败")?;
-            if bridge.is_none() { *bridge = Some(Arc::new(Bridge::spawn()?)); }
+            if bridge.is_none() { *bridge = Some(Arc::new(Bridge::spawn(diagnostics)?)); }
             Arc::clone(bridge.as_ref().unwrap())
         };
         match instance.request(&request) {
             Ok(value) => Ok(value),
             Err(first_error) => {
                 if let Ok(mut bridge) = state.lock() {
-                    if bridge.as_ref().map(|value| Arc::ptr_eq(value, &instance)).unwrap_or(false) { *bridge = None; }
+                    if bridge.as_ref().map(|value| Arc::ptr_eq(value, &instance)).unwrap_or(false) {
+                        // Retire the old process before allowing a replacement.
+                        // Other in-flight Arc owners must not keep two writers alive.
+                        instance.terminate();
+                        *bridge = None;
+                    }
                 }
                 Err(first_error)
             }
@@ -441,6 +500,115 @@ async fn sidecar_request(state: tauri::State<'_, AppState>, request: Value) -> R
     })
     .await
     .map_err(|error| format!("sidecar 工作线程失败: {error}"))?
+}
+
+#[tauri::command]
+fn sidecar_diagnostics(state: tauri::State<'_, AppState>) -> Value {
+    let events = state.1.lock().map(|events| events.iter().cloned().collect::<Vec<_>>()).unwrap_or_default();
+    let pending_requests = state.0.lock().ok().and_then(|bridge| bridge.as_ref().and_then(|bridge| bridge.pending.lock().ok().map(|requests| requests.len()))).unwrap_or(0);
+    serde_json::json!({ "events": events, "pending_requests": pending_requests })
+}
+
+#[tauri::command]
+async fn check_for_updates(state: tauri::State<'_, AppState>) -> Result<Value, String> {
+    let request_id = format!("update-check-{}", std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|value| value.as_nanos()).unwrap_or_default());
+    let response = sidecar_request(state, serde_json::json!({"id":request_id,"method":"system.checkForUpdates","params":{"current":env!("CARGO_PKG_VERSION")}})).await?;
+    if response["ok"].as_bool() == Some(true) { Ok(response["result"].clone()) }
+    else { Err(response["error"]["message"].as_str().unwrap_or("Update check failed").to_string()) }
+}
+
+fn allowed_release_url(url: &str) -> bool {
+    const ROOT: &str = "https://github.com/haotian26/FormulaOCR/releases";
+    if url == ROOT { return true; }
+    let Some(tag) = url.strip_prefix(&format!("{ROOT}/tag/")) else { return false; };
+    !tag.is_empty() && tag.len() <= 64 && tag.bytes().all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'-' | b'_'))
+}
+
+#[tauri::command]
+async fn open_release_page(url: String) -> Result<(), String> {
+    if !allowed_release_url(&url) { return Err("Only the official FormulaOCR release page can be opened".into()); }
+    tauri::async_runtime::spawn_blocking(move || {
+        let status = Command::new("/usr/bin/open").arg(&url).status().map_err(|_| "Cannot open release page".to_string())?;
+        if status.success() { Ok(()) } else { Err("Cannot open release page".into()) }
+    }).await.map_err(|_| "Release-page worker failed".to_string())?
+}
+
+fn export_name(suggested: Option<String>) -> String {
+    let value = suggested.unwrap_or_else(|| "FormulaOCR-history.tex".into());
+    let mut safe: String = value.chars().filter(|ch| !ch.is_control() && !matches!(ch, '/' | '\\' | ':')).take(100).collect();
+    if safe.is_empty() || safe.starts_with('.') { safe = "FormulaOCR-history.tex".into(); }
+    if !safe.to_ascii_lowercase().ends_with(".tex") { safe.push_str(".tex"); }
+    safe
+}
+
+#[tauri::command]
+async fn export_history_tex<R: tauri::Runtime>(app: tauri::AppHandle<R>, text: String, suggested_name: Option<String>, language: Option<String>) -> Result<Option<String>, String> {
+    if text.len() > 10 * 1024 * 1024 { return Err("History export exceeds 10 MiB".into()); }
+    let name = export_name(suggested_name);
+    let prompt = if language.as_deref() == Some("en") { "Export FormulaOCR history as LaTeX" } else { "导出 FormulaOCR 历史记录为 LaTeX" };
+    let (sender, receiver) = mpsc::channel::<Result<Option<std::path::PathBuf>, String>>();
+    let dialog_app = app.clone();
+    app.run_on_main_thread(move || {
+        use block2::RcBlock;
+        use objc2::MainThreadMarker;
+        use objc2_app_kit::{NSSavePanel, NSWindow, NSModalResponse, NSModalResponseOK, NSModalResponseCancel};
+        use objc2_foundation::{NSArray, NSString};
+        let result = (|| -> Result<(), String> {
+            let mtm = MainThreadMarker::new().ok_or("Cannot open the export Save dialog")?;
+            let window = dialog_app.get_webview_window("main").ok_or("Cannot open the export Save dialog")?;
+            window.show().map_err(|_| "Cannot open the export Save dialog")?;
+            window.set_focus().map_err(|_| "Cannot open the export Save dialog")?;
+            let native_pointer = window.ns_window().map_err(|_| "Cannot open the export Save dialog")?;
+            // Tauri retains the main window. The sheet and completion stay on
+            // AppKit's main thread; only the selected path crosses to a worker.
+            let native_window = unsafe { native_pointer.cast::<NSWindow>().as_ref() }.ok_or("Cannot open the export Save dialog")?;
+            let panel = NSSavePanel::savePanel(mtm);
+            panel.setMessage(Some(&NSString::from_str(prompt)));
+            panel.setCanCreateDirectories(true);
+            let extension = NSString::from_str("tex");
+            let allowed = NSArray::from_slice(&[&*extension]);
+            #[allow(deprecated)]
+            panel.setAllowedFileTypes(Some(&allowed));
+            // Configure the type before the name: AppKit otherwise appends
+            // the new required extension to the already supplied .tex name.
+            panel.setNameFieldStringValue(&NSString::from_str(&name));
+            let completion_panel = panel.clone();
+            let reply = sender.clone();
+            let completion = RcBlock::new(move |response: NSModalResponse| {
+                let selected = if response == NSModalResponseOK {
+                    completion_panel.URL().and_then(|url| url.path()).map(|path| Some(std::path::PathBuf::from(path.to_string()))).ok_or_else(|| "Invalid export destination".to_string())
+                } else if response == NSModalResponseCancel { Ok(None) }
+                else { Err("The export Save dialog failed".to_string()) };
+                completion_panel.orderOut(None);
+                let _ = reply.send(selected);
+            });
+            panel.beginSheetModalForWindow_completionHandler(native_window, &completion);
+            Ok(())
+        })();
+        if let Err(error) = result { let _ = sender.send(Err(error)); }
+    }).map_err(|_| "Cannot open the export Save dialog".to_string())?;
+    tauri::async_runtime::spawn_blocking(move || {
+        let Some(path) = receiver.recv().map_err(|_| "The export Save dialog failed".to_string())?? else { return Ok(None); };
+        if !path.is_absolute() || !path.extension().and_then(|extension| extension.to_str()).map(|extension| extension.eq_ignore_ascii_case("tex")).unwrap_or(false) {
+            return Err("Choose a filename ending in .tex".into());
+        }
+        let suffix = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|value| value.as_nanos()).unwrap_or_default();
+        let temporary = path.with_file_name(format!(".formulaocr-export-{}-{suffix}.tmp", std::process::id()));
+        let mut created_temporary = false;
+        let write_result = (|| -> Result<(), std::io::Error> {
+            use std::os::unix::fs::OpenOptionsExt;
+            let mut output = std::fs::OpenOptions::new().write(true).create_new(true).mode(0o600).open(&temporary)?;
+            created_temporary = true;
+            output.write_all(text.as_bytes())?;
+            output.sync_all()?;
+            std::fs::rename(&temporary, &path)
+        })();
+        if write_result.is_err() {
+            if created_temporary { let _ = std::fs::remove_file(&temporary); }
+            return Err("Cannot save the history export; the original destination was preserved".into());
+        }
+        Ok(Some(path.to_string_lossy().into_owned()))
+    }).await.map_err(|_| "History-export worker failed".to_string())?
 }
 
 #[tauri::command]
@@ -605,10 +773,10 @@ pub fn run() {
                 })
                 .build(),
         )
-        .manage(AppState(Arc::new(Mutex::new(None))))
+        .manage(AppState(Arc::new(Mutex::new(None)), Arc::new(Mutex::new(VecDeque::new()))))
         .manage(HotkeyState(Mutex::new(String::new())))
         .manage(Lifecycle::default())
-        .invoke_handler(tauri::generate_handler![sidecar_request, stage_image_bytes, native_copy_word, native_screenshot, set_global_hotkey, set_menu_language, quit_application, set_activation_policy, resize_settings_window, native_copy_text, native_paste_image, set_hotkey_recording, cancel_quit, continue_quit, complete_quit, main_geometry, restore_main_geometry])
+        .invoke_handler(tauri::generate_handler![sidecar_request, sidecar_diagnostics, check_for_updates, open_release_page, export_history_tex, stage_image_bytes, native_copy_word, native_screenshot, set_global_hotkey, set_menu_language, quit_application, set_activation_policy, resize_settings_window, native_copy_text, native_paste_image, set_hotkey_recording, cancel_quit, continue_quit, complete_quit, main_geometry, restore_main_geometry])
         .setup(|app| {
             let menu = tray_menu(app.handle(), "zh-CN")?;
             let mut tray_builder = TrayIconBuilder::with_id("main")
@@ -660,4 +828,69 @@ pub fn run() {
             _ => {}
         }
     });
+}
+
+#[cfg(test)]
+mod recovery_tests {
+    use super::*;
+    use std::io::Cursor;
+
+    #[test]
+    fn protocol_fault_releases_all_waiters_without_retaining_input() {
+        for input in ["not-json SECRET-DO-NOT-LOG\n", "{\"id\":1,\"ok\":true}\n", ""] {
+            let pending: PendingResponses = Arc::new(Mutex::new(HashMap::new()));
+            let diagnostics: Diagnostics = Arc::new(Mutex::new(VecDeque::new()));
+            let (sender, receiver) = mpsc::channel();
+            pending.lock().unwrap().insert("waiting".into(), sender);
+            read_responses(Cursor::new(input), &pending, &diagnostics);
+            assert!(receiver.try_recv().unwrap().is_err());
+            assert!(pending.lock().unwrap().is_empty());
+            assert!(!format!("{:?}", diagnostics.lock().unwrap()).contains("SECRET"));
+        }
+    }
+
+    #[test]
+    fn responses_are_routed_by_id_before_exit_releases_remaining_waiters() {
+        let pending: PendingResponses = Arc::new(Mutex::new(HashMap::new()));
+        let diagnostics: Diagnostics = Arc::new(Mutex::new(VecDeque::new()));
+        let (sender, receiver) = mpsc::channel();
+        pending.lock().unwrap().insert("b".into(), sender);
+        read_responses(Cursor::new("{\"id\":\"unknown\",\"ok\":true}\n{\"id\":\"b\",\"ok\":true,\"result\":7}\n"), &pending, &diagnostics);
+        assert_eq!(receiver.try_recv().unwrap().unwrap()["result"], 7);
+    }
+
+    #[test]
+    fn diagnostics_are_bounded_and_deduplicated() {
+        let diagnostics: Diagnostics = Arc::new(Mutex::new(VecDeque::new()));
+        for _ in 0..40 { record_diagnostic(&diagnostics, "Started"); record_diagnostic(&diagnostics, "Stopped"); }
+        assert_eq!(diagnostics.lock().unwrap().len(), 16);
+        record_diagnostic(&diagnostics, "Stopped");
+        assert_eq!(diagnostics.lock().unwrap().len(), 16);
+    }
+
+    #[test]
+    fn release_destinations_are_restricted() {
+        assert!(allowed_release_url("https://github.com/haotian26/FormulaOCR/releases"));
+        assert!(allowed_release_url("https://github.com/haotian26/FormulaOCR/releases/tag/v0.4.2"));
+        for url in ["http://github.com/haotian26/FormulaOCR/releases", "https://github.com/haotian26/FormulaOCR/releases/tag/../../settings", "https://github.com/haotian26/FormulaOCR/releases?redirect=evil", "https://github.com.evil/haotian26/FormulaOCR/releases", "https://github.com/haotian26/FormulaOCR/releases/tag/%2f"] {
+            assert!(!allowed_release_url(url));
+        }
+    }
+
+    #[test]
+    fn export_names_are_suggestions_not_paths_or_script() {
+        assert_eq!(export_name(None), "FormulaOCR-history.tex");
+        assert_eq!(export_name(Some("/tmp/example\n.tex".into())), "tmpexample.tex");
+        assert_eq!(export_name(Some("notes".into())), "notes.tex");
+        assert_eq!(export_name(Some("../hidden".into())), "FormulaOCR-history.tex");
+    }
+
+    #[test]
+    fn export_extension_is_idempotent() {
+        for suggestion in ["FormulaOCR-history.tex", "notes", "notes.TeX"] {
+            let once = export_name(Some(suggestion.into()));
+            assert_eq!(export_name(Some(once.clone())), once);
+            assert!(!once.to_ascii_lowercase().ends_with(".tex.tex"));
+        }
+    }
 }

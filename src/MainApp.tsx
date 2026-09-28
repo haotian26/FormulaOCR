@@ -22,6 +22,8 @@ import {
   X,
   Check,
   SlidersHorizontal,
+  Download,
+  Search,
 } from "lucide-react";
 import { convertFileSrc, invoke } from "@tauri-apps/api/core";
 import { emit, listen } from "@tauri-apps/api/event";
@@ -41,6 +43,9 @@ import { defaults, type Settings, type Source, type RecognitionMode, type Profil
 import { SettingsCenter } from "./SettingsCenter";
 import { useTauriEvent } from "./hooks";
 import { DraftQueue, readLayout, DEFAULT_LAYOUT } from "./state";
+import { ImageSession } from "./imageSession";
+import { ImageViewer } from "./ImageViewer";
+import { filterHistory, exportHistoryLatex } from "./historyTools";
 
 function pngBase64ToBlob(value: string): Blob {
   const binary = window.atob(value);
@@ -226,6 +231,13 @@ export function MainApp() {
   const [historyId, setHistoryId] = useState<string | null>(null);
   const [records, setRecords] = useState<RecordItem[]>([]);
   const [selectedRecords, setSelectedRecords] = useState<string[]>([]);
+  const [historyQuery, setHistoryQuery] = useState("");
+  const [exporting, setExporting] = useState(false);
+  const [draftSaveFailed, setDraftSaveFailed] = useState(false);
+  const [quitBlocked, setQuitBlocked] = useState(false);
+  const quitting = useRef(false);
+  const editRevision = useRef(0);
+  const imageSession = useRef(new ImageSession(callSidecar));
   const [latex, setLatex] = useState("");
   const [localLatex, setLocalLatex] = useState("");
   const [apiLatex, setApiLatex] = useState("");
@@ -252,7 +264,10 @@ export function MainApp() {
   const draftQueue = useRef<DraftQueue | null>(null);
   if (!draftQueue.current) draftQueue.current = new DraftQueue(
     (draft) => callSidecar("history.updateDraft", draft),
-    (error) => setStatus(translate(languageRef.current, "历史保存失败：{error}", { error: localizeError(languageRef.current, error) })),
+    (error) => {
+      setDraftSaveFailed(true);
+      setStatus(translate(languageRef.current, "历史保存失败：{error}", { error: localizeError(languageRef.current, error) }));
+    },
   );
   const bootstrapped = useRef(false);
   const hotkeyLoaded = useRef(false);
@@ -270,7 +285,14 @@ export function MainApp() {
     latexRef.current = latex;
   }, [latex]);
   const resetEditGroup = (nextSource: Source = source) => {
+    ++editRevision.current;
     editGroup.current = { source: nextSource, lastAt: 0 };
+  };
+  const flushDrafts = async () => {
+    const saved = await draftQueue.current!.flush();
+    setDraftSaveFailed(!saved);
+    if (!saved) setStatus(t("草稿尚未保存，请重试后继续"));
+    return saved;
   };
   const reloadSettings = useCallback(() => {
     void callSidecar<Settings>("settings.get")
@@ -358,10 +380,22 @@ export function MainApp() {
     void invoke("set_activation_policy", { accessory: settings.hide_dock_on_close });
   });
   const finishQuit = async () => {
+    if (quitting.current) return;
+    quitting.current = true;
     ++requestId.current;
-    await draftQueue.current!.flush();
-    await saveGeometry();
-    await invoke("complete_quit");
+    setBusy(false);
+    try {
+      if (!(await flushDrafts())) {
+        setQuitBlocked(true);
+        // A menu-bar Quit may arrive while the main window is hidden.
+        await invoke("set_activation_policy", { accessory: false });
+        await getCurrentWindow().show(); await getCurrentWindow().setFocus();
+        return;
+      }
+      setQuitBlocked(false);
+      await saveGeometry();
+      await invoke("complete_quit");
+    } finally { quitting.current = false; }
   };
   useTauriEvent("formulaocr://quit-requested", () => { void finishQuit(); });
   useTauriEvent("formulaocr://flush-before-quit", () => { void finishQuit(); });
@@ -406,7 +440,8 @@ export function MainApp() {
   );
 
   const openImage = async (blob: Blob, token: number, stagedPath?: string) => {
-    const flushed = draftQueue.current!.flush();
+    if (!(await flushDrafts()) || token !== requestId.current) return null;
+    imageSession.current.clear();
     const previousId = imageIdRef.current;
     imageIdRef.current = null;
     setImageId(null);
@@ -451,14 +486,13 @@ export function MainApp() {
       // WebKit may throttle animation frames in that state.
       window.setTimeout(finish, 32);
     });
-    await flushed;
     if (token !== requestId.current) return null;
     const path =
       stagedPath ||
       (await invoke<string>("stage_image_bytes", {
         bytes: Array.from(new Uint8Array(await blob.arrayBuffer())),
       }));
-    const opened = await callSidecar<{ image_id: string }>("image.openPath", {
+    const opened = await callSidecar<{ image_id: string; session_id?: string }>("image.openPath", {
       path,
     });
     if (token !== requestId.current) {
@@ -468,6 +502,7 @@ export function MainApp() {
       return null;
     }
     imageIdRef.current = opened.image_id;
+    imageSession.current.adopt(opened.image_id, blob, opened.session_id);
     setImageId(opened.image_id);
     return opened.image_id;
   };
@@ -479,13 +514,15 @@ export function MainApp() {
       try {
         const id = await openImage(blob, token, stagedPath);
         if (!id) return;
+        const readyId = await imageSession.current.ensure();
+        if (token !== requestId.current) return;
         const result = await callSidecar<{
           formatted_latex?: string;
           raw_latex?: string;
           elapsed_ms?: number;
           history_id?: string;
           history_error?: string;
-        }>("ocr.recognize", { image_id: id, mode });
+        }>("ocr.recognize", { image_id: readyId, mode });
         if (token !== requestId.current) return;
         const value = result.formatted_latex || result.raw_latex || "";
         const raw = result.raw_latex || value;
@@ -498,6 +535,7 @@ export function MainApp() {
         setApiFormatted("");
         setSource("local");
         setHistoryId(result.history_id || null);
+        imageSession.current.setHistoryId(result.history_id);
         setStacks({
           local: { undo: [], redo: [] },
           api: { undo: [], redo: [] },
@@ -546,6 +584,7 @@ export function MainApp() {
     const now = performance.now();
     const previous = latexRef.current;
     if (value === previous) return;
+    ++editRevision.current;
     const startsNewGroup =
       editGroup.current.lastAt === 0 ||
       editGroup.current.source !== source ||
@@ -613,15 +652,17 @@ export function MainApp() {
     setBusy(true);
     setStatus(t("正在进行 API 重识别…"));
     const token = requestId.current;
-    await draftQueue.current!.flush();
     try {
+      if (!(await flushDrafts()) || token !== requestId.current) return;
+      const readyId = await imageSession.current.ensure();
+      if (token !== requestId.current) return;
       const result = await callSidecar<{
         raw_latex: string;
         formatted_latex?: string;
         profile_name: string;
         history_id?: string;
         history_error?: string;
-      }>("api.recognize", { image_id: imageId, profile_id: activeId, mode });
+      }>("api.recognize", { image_id: readyId, profile_id: activeId, mode });
       if (token !== requestId.current) return;
       const value = result.formatted_latex || result.raw_latex;
       setStacks((state) => ({
@@ -638,7 +679,7 @@ export function MainApp() {
       setSource("api");
       latexRef.current = value;
       resetEditGroup("api");
-      if (result.history_id) setHistoryId(result.history_id);
+      if (result.history_id) { setHistoryId(result.history_id); imageSession.current.setHistoryId(result.history_id); }
       setStatus(t("API 完成 · {name}", { name: result.profile_name }));
       if (result.history_error) setStatus(t("历史保存失败：{error}", { error: result.history_error }));
       if (drawer) void callSidecar<{ records: RecordItem[] }>("history.list").then((value) => setRecords(value.records));
@@ -654,9 +695,9 @@ export function MainApp() {
   const restore = async (id: string) => {
     const token = ++requestId.current;
     setBusy(true);
-    await draftQueue.current!.flush();
     try {
-      const opened = await callSidecar<{ record: RecordItem; image_id: string; png_base64: string }>("history.open", { id });
+      if (!(await flushDrafts()) || token !== requestId.current) return;
+      const opened = await callSidecar<{ record: RecordItem; image_id: string; png_base64: string; session_id?: string }>("history.open", { id });
       if (token !== requestId.current) {
         void callSidecar("image.release", { image_id: opened.image_id });
         return;
@@ -664,7 +705,9 @@ export function MainApp() {
       const record = opened.record;
       if (imageIdRef.current) void callSidecar("image.release", { image_id: imageIdRef.current });
       if (imageUrlRef.current) URL.revokeObjectURL(imageUrlRef.current);
-      const url = URL.createObjectURL(pngBase64ToBlob(opened.png_base64));
+      const blob = pngBase64ToBlob(opened.png_base64);
+      const url = URL.createObjectURL(blob);
+      imageSession.current.adopt(opened.image_id, blob, opened.session_id, id);
       imageUrlRef.current = url;
       imageIdRef.current = opened.image_id;
       setImageUrl(url);
@@ -695,27 +738,30 @@ export function MainApp() {
   const switchMode = async (nextMode: RecognitionMode) => {
     if (nextMode === mode || busy) return;
     const token = requestId.current;
+    const revision = editRevision.current;
     if (
-      ((localOriginal && localLatex !== localFormatted) || (apiOriginal && apiLatex !== apiFormatted)) &&
+      (localLatex !== localFormatted || apiLatex !== apiFormatted) &&
       !window.confirm(t("切换识别模式会重新排版当前结果，是否继续？"))
     )
       return;
+    setBusy(true);
     try {
+      if (!(await flushDrafts())) return;
       const [local, api] = await Promise.all([
-        localOriginal
+        (localOriginal || localLatex)
           ? callSidecar<{ formatted_latex: string }>("ocr.format", {
-              latex: localOriginal,
+              latex: localOriginal || localLatex,
               mode: nextMode,
             })
           : Promise.resolve({ formatted_latex: "" }),
-        apiOriginal
+        (apiOriginal || apiLatex)
           ? callSidecar<{ formatted_latex: string }>("ocr.format", {
-              latex: apiOriginal,
+              latex: apiOriginal || apiLatex,
               mode: nextMode,
             })
           : Promise.resolve({ formatted_latex: "" }),
       ]);
-      if (token !== requestId.current) return;
+      if (token !== requestId.current || revision !== editRevision.current) return;
       setMode(nextMode);
       setLocalFormatted(local.formatted_latex);
       setApiFormatted(api.formatted_latex);
@@ -724,23 +770,28 @@ export function MainApp() {
       setLatex(
         source === "local" ? local.formatted_latex : api.formatted_latex,
       );
-      setStacks({ local: { undo: [], redo: [] }, api: { undo: [], redo: [] } });
+      setStacks((current) => ({
+        local: localLatex === local.formatted_latex ? current.local : { undo: [...current.local.undo, localLatex].slice(-100), redo: [] },
+        api: apiLatex === api.formatted_latex ? current.api : { undo: [...current.api.undo, apiLatex].slice(-100), redo: [] },
+      }));
       latexRef.current =
         source === "local" ? local.formatted_latex : api.formatted_latex;
       resetEditGroup(source);
       if (historyId) {
-        await draftQueue.current!.flush();
-        await callSidecar("history.setMode", { id: historyId, mode: nextMode });
+        // Queue the displayed values before yielding. Edits made while the
+        // mode metadata is being saved must remain the newest drafts.
         if (localOriginal) draftQueue.current!.schedule({ id: historyId, source: "local", latex: local.formatted_latex, activate: source === "local" });
         if (apiOriginal) draftQueue.current!.schedule({ id: historyId, source: "api", latex: api.formatted_latex, activate: source === "api" });
-        await draftQueue.current!.flush();
+        await callSidecar("history.setMode", { id: historyId, mode: nextMode });
+        if (!(await flushDrafts())) return;
       }
+      if (token !== requestId.current) return;
       setStatus(
         t(nextMode === "chemistry" ? "已切换为化学排版" : "已切换为数学排版"),
       );
     } catch (error) {
-      setStatus(t("切换模式失败：{error}", { error: localizeError(language, error) }));
-    }
+      if (token === requestId.current) setStatus(t("切换模式失败：{error}", { error: localizeError(language, error) }));
+    } finally { if (token === requestId.current) setBusy(false); }
   };
   const resizeImage = (event: ReactPointerEvent) => {
     event.preventDefault();
@@ -793,6 +844,7 @@ export function MainApp() {
   };
   const clearWorkspace = () => {
     ++requestId.current;
+    imageSession.current.clear();
     if (imageIdRef.current) void callSidecar("image.release", { image_id: imageIdRef.current });
     if (imageUrlRef.current) URL.revokeObjectURL(imageUrlRef.current);
     imageIdRef.current = null;
@@ -805,8 +857,8 @@ export function MainApp() {
     latexRef.current = ""; resetEditGroup("local");
   };
   const deleteRecords = async (ids: string[], all = false) => {
-    await draftQueue.current!.flush();
     try {
+      if (!(await flushDrafts())) return;
       await callSidecar(all ? "history.deleteAll" : "history.deleteMany", { ids });
       const removed = new Set(ids);
       const remaining = all ? [] : records.filter((record) => !removed.has(record.id));
@@ -822,6 +874,21 @@ export function MainApp() {
     } catch (error) { setStatus(localizeError(language, error)); }
   };
   const deleteRecord = (id: string) => deleteRecords([id]);
+  const visibleRecords = useMemo(() => filterHistory(records, historyQuery), [records, historyQuery]);
+  const exportHistory = async () => {
+    if (exporting) return;
+    setExporting(true);
+    try {
+      if (!(await flushDrafts())) return;
+      const fresh = await callSidecar<{ records: RecordItem[] }>("history.list");
+      setRecords(fresh.records);
+      const chosen = selectedRecords.length ? fresh.records.filter(record => selectedRecords.includes(record.id)) : filterHistory(fresh.records, historyQuery);
+      if (!chosen.length) return;
+      const path = await invoke<string | null>("export_history_tex", { text: exportHistoryLatex(chosen), suggestedName: "FormulaOCR-history.tex", language });
+      if (path) setStatus(t("已导出 {count} 条记录", { count: chosen.length }));
+    } catch (error) { setStatus(localizeError(language, error)); }
+    finally { setExporting(false); }
+  };
   const undo = () => {
     const value = stacks[source].undo[stacks[source].undo.length - 1];
     if (value === undefined) return;
@@ -993,7 +1060,7 @@ export function MainApp() {
       >
         <div className="image-card">
           {imageUrl ? (
-            <img className="source-image" src={imageUrl} alt={t("当前公式图片")} />
+            <ImageViewer src={imageUrl} language={language} />
           ) : (
             <div className="empty-state">
               <ImageUp size={32} />
@@ -1123,6 +1190,7 @@ export function MainApp() {
           {t("识别完成后自动复制 Word 格式")}
         </label>
         <span>{status}</span>
+        {draftSaveFailed && <button className="draft-retry" onClick={() => void flushDrafts()}>{t("重试保存")}</button>}
       </footer>
       {drawer && (
         <>
@@ -1169,9 +1237,11 @@ export function MainApp() {
                 <X size={17} />
               </button>
             </div>
-            {records.length ? (
+            <label className="history-search"><Search size={15} /><input type="search" value={historyQuery} placeholder={t("搜索公式或配置")} aria-label={t("搜索历史")} onChange={event => setHistoryQuery(event.target.value)} /></label>
+            <div className="history-actions"><span>{t("{count} 条记录", { count: visibleRecords.length })}</span><button className="secondary-button" disabled={exporting || (!selectedRecords.length && !visibleRecords.length)} onClick={() => void exportHistory()}><Download size={15}/>{t(selectedRecords.length ? "导出所选" : "导出结果")}</button></div>
+            {visibleRecords.length ? (
               <div className="history-list">
-                {records.map((record) => (
+                {visibleRecords.map((record) => (
                   <div className={historyId === record.id ? "history-item current" : "history-item"} key={record.id} onContextMenu={(event) => { event.preventDefault(); if (window.confirm(t("删除此历史记录？"))) void deleteRecord(record.id); }}>
                     <input
                       type="checkbox"
@@ -1218,7 +1288,7 @@ export function MainApp() {
                 ))}
               </div>
             ) : (
-              <div className="drawer-empty">{t("暂无识别记录")}</div>
+              <div className="drawer-empty">{t(historyQuery.trim() ? "没有匹配的记录" : "暂无识别记录")}</div>
             )}
             <div
               className="drawer-resize"
@@ -1254,6 +1324,25 @@ export function MainApp() {
           />
         </div>
       )}
+      {quitBlocked && <div className="modal-backdrop">
+        <section className="draft-quit-dialog" role="alertdialog" aria-modal="true" aria-labelledby="draft-quit-title" aria-describedby="draft-quit-description" onKeyDown={event => {
+          if (event.key === "Escape") { setQuitBlocked(false); void invoke("cancel_quit"); }
+          if (event.key === "Tab") {
+            const buttons = Array.from(event.currentTarget.querySelectorAll<HTMLButtonElement>("button:not(:disabled)"));
+            const index = buttons.indexOf(document.activeElement as HTMLButtonElement);
+            event.preventDefault(); buttons[(index + (event.shiftKey ? buttons.length - 1 : 1)) % buttons.length]?.focus();
+          }
+        }}>
+          <h2 id="draft-quit-title">{t("草稿尚未保存")}</h2>
+          <p id="draft-quit-description">{t("退出会丢失未保存的编辑。可以重试保存，或取消退出。")}</p>
+          <div className="draft-quit-actions">
+            <button className="text-danger" onClick={async () => { draftQueue.current!.discard(); await saveGeometry(); await invoke("complete_quit"); }}>{t("放弃并退出")}</button>
+            <span className="toolbar-spacer"/>
+            <button className="secondary-button" onClick={() => { setQuitBlocked(false); void invoke("cancel_quit"); }}>{t("取消退出")}</button>
+            <button autoFocus className="toolbar-button primary" onClick={() => void finishQuit()}>{t("重试保存")}</button>
+          </div>
+        </section>
+      </div>}
     </main>
   );
 }

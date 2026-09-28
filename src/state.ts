@@ -27,23 +27,42 @@ export type Draft = { id: string; source: Source; latex: string; activate?: bool
 /** One serialized write chain: a late debounce can never revert a newer edit. */
 export class DraftQueue {
   private pending = new Map<string, Draft>();
+  private activeSources = new Map<string, Source>();
   private timer: ReturnType<typeof setTimeout> | undefined;
   private chain: Promise<void> = Promise.resolve();
   constructor(private write: (draft: Draft) => Promise<unknown>, private failed: (error: unknown) => void, private delay = 400) {}
   schedule(draft: Draft) {
-    this.pending.set(`${draft.id}:${draft.source}`, draft);
+    const key = `${draft.id}:${draft.source}`;
+    if (draft.activate !== false) this.activeSources.set(draft.id, draft.source);
+    // Replacing a Map entry does not change its insertion order. Move the
+    // latest edit to the end so rapid source switches retain their order.
+    this.pending.delete(key);
+    this.pending.set(key, draft);
     clearTimeout(this.timer);
     this.timer = setTimeout(() => { void this.flush(); }, this.delay);
   }
-  flush(): Promise<void> {
+  hasPending(): boolean { return this.pending.size > 0; }
+  discard(): void { clearTimeout(this.timer); this.pending.clear(); this.activeSources.clear(); }
+  flush(): Promise<boolean> {
     clearTimeout(this.timer);
-    const drafts = [...this.pending.values()];
-    this.pending.clear();
-    this.chain = this.chain.then(async () => {
-      for (const draft of drafts) {
-        try { await this.write(draft); } catch (error) { this.failed(error); }
+    const result = this.chain.then(async () => {
+      // Read at execution time: another flush or edit may have superseded work
+      // while this one waited. Never retry an older value over a newer draft.
+      for (const [key, draft] of [...this.pending]) {
+        if (this.pending.get(key) !== draft) continue;
+        this.pending.delete(key);
+        const write = draft.activate !== false && this.activeSources.get(draft.id) !== draft.source
+          ? { ...draft, activate: false } : draft;
+        try { await this.write(write); } catch (error) {
+          if (!this.pending.has(key)) this.pending.set(key, draft);
+          this.failed(error);
+        }
       }
+      const pendingIds = new Set([...this.pending.values()].map(draft => draft.id));
+      for (const id of this.activeSources.keys()) if (!pendingIds.has(id)) this.activeSources.delete(id);
+      return this.pending.size === 0;
     });
-    return this.chain;
+    this.chain = result.then(() => undefined);
+    return result;
   }
 }

@@ -4,6 +4,7 @@ export type Source = "local" | "api";
 export type RecognitionMode = "chemistry" | "math";
 export type Settings = {
   auto_copy: boolean;
+  default_api_ocr: boolean;
   hide_dock_on_close: boolean;
   hotkey: string;
   history_limit: number;
@@ -47,6 +48,7 @@ export type Layout = { image: number; result: number; drawerWidth: number };
 
 export const defaults: Settings = {
   auto_copy: false,
+  default_api_ocr: false,
   hide_dock_on_close: true,
   hotkey: "ctrl+alt+cmd+o",
   history_limit: 200,

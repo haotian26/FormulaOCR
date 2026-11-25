@@ -10,6 +10,7 @@ import { recordedShortcut } from "./state";
 import { useTauriEvent } from "./hooks";
 import { defaults, type Settings, type RecognitionMode, type Profile } from "./types";
 import { AboutPanel } from "./AboutPanel";
+import { useConfirmation } from "./useConfirmation";
 
 function HotkeyRecorder({
   value,
@@ -146,6 +147,7 @@ export function SettingsCenter({
   const allowCloseRef = useRef(false);
   const quittingRef = useRef(false);
   const language = normalizeLanguage(settings.language);
+  const { confirm, confirmation } = useConfirmation(language);
   const t = (text: string, values?: Record<string, string | number>) =>
     translate(language, text, values);
   const selected = profiles.find((profile) => profile.id === selectedId);
@@ -166,6 +168,7 @@ export function SettingsCenter({
   const pageKeys: Record<string, (keyof Settings)[]> = {
     常规: [
       "auto_copy",
+      "default_api_ocr",
       "hide_dock_on_close",
       "default_recognition_mode",
       "language",
@@ -306,7 +309,7 @@ export function SettingsCenter({
   const saveSettings = async () => {
     if (saving || !pageValid || (page === "历史记录" && !historyValid)) return;
     if (page === "历史记录" && settings.history_limit < savedSettings.history_limit &&
-      !window.confirm(t("降低上限会删除最旧记录，继续保存？"))) return;
+      !(await confirm(t("降低上限会删除最旧记录，继续保存？")))) return;
     setSaving(true); setError(""); setFeedback("");
     const keys = pageKeys[page] || [];
     const patch = Object.fromEntries(keys.map((key) => [key, settings[key]]));
@@ -451,13 +454,19 @@ export function SettingsCenter({
           <h2>{t(page)}</h2>
           <p>
             {page === "自定义模型与 API"
-              ? t("管理仅由你主动触发的远程重识别配置。")
+              ? t("管理远程识别使用的服务和模型。")
               : t("FormulaOCR 的本机行为与显示选项。")}
           </p>
         </div>
         <fieldset className="settings-page-content" disabled={!ready || saving}>
           {page === "常规" && (
             <div className="settings-card">
+              <Toggle
+                checked={settings.default_api_ocr}
+                onChange={(value) => setSettings({ ...settings, default_api_ocr: value })}
+                title={t("默认使用 API 识别")}
+                description={t("打开、粘贴或截图时，将图片发送到当前启用的 API 配置。没有可用配置时使用内置识别。")}
+              />
               <Toggle
                 checked={settings.auto_copy}
                 onChange={(value) =>
@@ -658,6 +667,7 @@ export function SettingsCenter({
           </div>
         </div>
       )}
+      {confirmation}
     </main>
   );
 }
@@ -733,7 +743,7 @@ function APISettings({
           checked={apiEnabled}
           onChange={setApiEnabled}
           title={t("启用 API 重识别")}
-          description={t("只有主动点击主窗口的 API 重识别按钮时才会上传当前图片。")}
+          description={t("供手动 API 识别和常规设置中的默认 API 识别使用。")}
         />
       </div>
       <div className="api-workspace">
@@ -840,6 +850,7 @@ function APISettings({
                       <div className="model-row">
                         <input
                           list="formulaocr-models"
+                          title={selected.model || ""}
                           value={selected.model || ""}
                           onChange={(event) =>
                             patchProfile({ model: event.target.value })

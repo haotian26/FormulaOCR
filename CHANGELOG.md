@@ -1,5 +1,25 @@
 # 更新日志 / Change Log
 
+## [Unreleased]
+
+### 中文
+
+- 在“设置 → 常规”中可开启“默认使用 API 识别”，将新打开、粘贴或截取的图片交给当前 API 配置处理。
+- 本地重新识别只更新内置分支，保留 API 原文、编辑稿、配置和撤销记录；重新识别后的历史也保留 API 分支。
+- API 配置菜单跟随按钮位置，统一名称缩进，对勾固定在名称前；适应名称变化和窗口缩放。
+- 修复模型 ID 输入框被压成窄列的问题，使其使用整行剩余宽度，并支持悬停查看完整模型名。
+- 用应用内确认框修复历史全部删除、批量与右键删除，以及降低历史上限的确认；取消和 Esc 不删除数据。
+- 用本地“重新识别”替换离线状态标签，保留独立 API 入口；复用原图，失败保留旧结果，覆盖手动稿前确认。
+
+### English
+
+- Enable **Use API recognition by default** in General settings to send newly opened, pasted or captured images to the active API profile.
+- Local Retry OCR updates only the built-in branch, retaining API output, drafts, profile metadata and undo history, including the API branch in the resulting history record.
+- Anchor the API profile menu to its button, with aligned names and a reserved leading checkmark column across name and window-size changes.
+- Let the model ID field fill its row instead of collapsing to a narrow column; show the full name on hover.
+- Replace unsupported browser confirmation panels with in-app dialogs for history deletion and limit reduction; Cancel and Escape preserve records.
+- Replace the offline badge with local Retry OCR while keeping API controls; reuse the image, preserve results on failure, and confirm draft replacement.
+
 ## [0.4.2] - 2026-09-28
 
 ### 0.4.2 — 中文

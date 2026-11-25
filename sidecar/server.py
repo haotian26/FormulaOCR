@@ -227,6 +227,8 @@ class Sidecar:
                 except Exception as render_exc:
                     render_error = str(render_exc)
                 with self._history_lock:
+                    previous_id = self.image_records.get(image_id)
+                    previous = self.history.get(previous_id) if previous_id else None
                     record = self.history.create_local(
                         image_bytes,
                         local_raw_latex=result.raw_latex,
@@ -235,6 +237,19 @@ class Sidecar:
                         local_render_error=render_error,
                         recognition_mode=mode,
                     )
+                    # Retrying local OCR must preserve the existing API branch,
+                    # including its draft, even if retention evicts the old row.
+                    if previous and previous.has_api:
+                        self.history.update_api(
+                            record.id,
+                            api_raw_latex=previous.api_raw_latex,
+                            api_formatted_latex=previous.api_formatted_latex,
+                            api_draft_latex=previous.api_draft_latex,
+                            api_profile_name=previous.api_profile_name,
+                            api_model=previous.api_model,
+                            api_render_error=previous.api_render_error,
+                        )
+                        self.history.set_active_source(record.id, "local")
                 if image_id in self.images:
                     self.image_records[image_id] = record.id
                 payload["history_id"] = record.id
@@ -310,6 +325,8 @@ class Sidecar:
             return {"ok": True, "message": f"连接成功，获取到 {len(models)} 个模型", "models": list(dict.fromkeys(models))}
         if method == "api.recognize":
             from api.providers import provider_for_profile
+            if params.get("automatic") and not self.settings.get()["default_api_ocr"]:
+                raise ValueError("默认 API 识别已关闭")
             profiles, enabled, active_id = self._load_profiles()
             if not enabled:
                 raise ValueError("API 重识别未启用")
@@ -331,26 +348,25 @@ class Sidecar:
             formatted = normalize_latex(result.raw_latex, mode=mode)
             payload["formatted_latex"] = formatted
             payload["mode"] = mode
-            if record_id:
-                try:
-                    from converter.latex_to_mathml import latex_to_mathml
-                    latex_to_mathml(formatted)
-                    render_error = None
-                except Exception as render_exc:
-                    render_error = str(render_exc)
-                try:
-                    updated = self.history.update_api(
-                        record_id,
-                        api_raw_latex=result.raw_latex,
-                        api_formatted_latex=formatted,
-                        api_draft_latex=formatted,
-                        api_profile_name=result.profile_name,
-                        api_model=result.model,
-                        api_render_error=render_error,
-                    )
-                    payload["history_id"] = record_id if updated else None
-                except Exception as exc:
-                    payload["history_error"] = str(exc)
+            try:
+                from converter.latex_to_mathml import latex_to_mathml
+                latex_to_mathml(formatted)
+                render_error = None
+            except Exception as render_exc:
+                render_error = str(render_exc)
+            try:
+                fields = dict(api_raw_latex=result.raw_latex, api_formatted_latex=formatted,
+                              api_draft_latex=formatted, api_profile_name=result.profile_name,
+                              api_model=result.model, api_render_error=render_error)
+                with self._history_lock:
+                    updated = self.history.update_api(record_id, **fields) if record_id else None
+                    if updated is None:
+                        updated = self.history.create_api(image_bytes, recognition_mode=mode, **fields)
+                    if image_id in self.images:
+                        self.image_records[image_id] = updated.id
+                    payload["history_id"] = updated.id
+            except Exception as exc:
+                payload["history_error"] = str(exc)
             return payload
         if method == "history.open":
             record = self.history.get(str(params.get("id", "")))

@@ -41,7 +41,30 @@ const open = async (page = "常规") => {
 };
 const save = () => screen.getByRole("button", { name:"保存" }) as HTMLButtonElement;
 
+it("lowering history limit requires in-app confirmation and cancellation does not save", async () => {
+  await open("历史记录");
+  fireEvent.change(screen.getByRole("spinbutton"), { target:{ value:"100" } });
+  fireEvent.click(save());
+  expect(screen.getByRole("dialog")).toBeTruthy();
+  fireEvent.click(screen.getByRole("button", { name:"取消" }));
+  expect(mock.call.mock.calls.some(([method]) => method === "settings.save")).toBe(false);
+  fireEvent.click(save());
+  fireEvent.click(screen.getByRole("button", { name:"确认" }));
+  await waitFor(() => expect(mock.call).toHaveBeenCalledWith("settings.save", { values:{ history_limit:100 } }));
+});
+
 describe("settings interaction", () => {
+  it("saves the opt-in for automatic API recognition only after Save", async () => {
+    await open();
+    const toggle = screen.getByLabelText(/默认使用 API 识别/) as HTMLInputElement;
+    expect(toggle.checked).toBe(false);
+    fireEvent.click(toggle);
+    expect(save().disabled).toBe(false);
+    expect(mock.call.mock.calls.some(([method]) => method === "settings.save")).toBe(false);
+    fireEvent.click(save());
+    await waitFor(() => expect(save().disabled).toBe(true));
+    expect(mock.call).toHaveBeenCalledWith("settings.save", { values:expect.objectContaining({ default_api_ocr:true }) });
+  });
   it("has a fixed-label disabled Save until a real change, including reverting to saved values", async () => {
     await open();
     expect(save().disabled).toBe(true);

@@ -90,6 +90,26 @@ def test_concurrent_history_updates_are_serialized(service):
     assert service.history._connection.execute("PRAGMA integrity_check").fetchone()[0] == "ok"
 
 
+def test_api_first_opt_in_and_history(service, monkeypatch):
+    from api.providers import RemoteOCRResult
+    image = service.dispatch("image.open", {"png_base64": base64.b64encode(png((255,255,255,255))).decode()})
+    params = {"image_id": image["image_id"], "automatic": True}
+    profile = SimpleNamespace(id="p", enabled=True)
+    monkeypatch.setattr(service, "_load_profiles", lambda: ([profile], True, "p"))
+    with patch("api.providers.provider_for_profile") as provider:
+        with pytest.raises(ValueError, match="已关闭"):
+            service.dispatch("api.recognize", params)
+        provider.assert_not_called()
+        service.dispatch("settings.save", {"values": {"default_api_ocr": True}})
+        provider.return_value.recognize.return_value = RemoteOCRResult("x^2", "openai_compatible", "Test", "fake", 1)
+        first = service.dispatch("api.recognize", params)
+        second = service.dispatch("api.recognize", params)
+    assert first["history_id"] == second["history_id"]
+    restored = service.dispatch("history.open", {"id": first["history_id"]})["record"]
+    assert restored["active_source"] == "api" and restored["api_raw_latex"] == "x^2"
+    assert restored["local_raw_latex"] == ""
+
+
 def test_api_result_survives_history_failure(service, monkeypatch):
     item = record(service)
     opened = service.dispatch("history.open", {"id":item.id})

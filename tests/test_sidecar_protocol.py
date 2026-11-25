@@ -9,6 +9,38 @@ import io
 from pathlib import Path
 
 
+def test_local_retry_preserves_api_history(tmp_path, monkeypatch):
+    from sidecar.server import Sidecar
+    from ocr.result import OCRResult
+    from PIL import Image
+    from types import SimpleNamespace
+
+    monkeypatch.setenv("FORMULAOCR_DATA_ROOT", str(tmp_path / "data"))
+    service = Sidecar()
+    monkeypatch.setattr(service, "_ensure_engine", lambda: SimpleNamespace(
+        recognize=lambda image: OCRResult("x^2", None, 1)))
+    stream = io.BytesIO()
+    Image.new("RGB", (8, 8), "white").save(stream, format="PNG")
+    service.dispatch("image.open", {"image_id":"retry", "png_base64":base64.b64encode(stream.getvalue()).decode()})
+    try:
+        first = service.dispatch("ocr.recognize", {"image_id":"retry"})
+        service.history.update_api(first["history_id"], api_raw_latex="y^3",
+            api_formatted_latex="y^{3}", api_draft_latex="edited API",
+            api_profile_name="Vision", api_model="model-a", api_render_error="draft error")
+        second = service.dispatch("ocr.recognize", {"image_id":"retry"})
+        saved = service.history.get(second["history_id"])
+        assert saved.api_raw_latex == "y^3"
+        assert saved.api_formatted_latex == "y^{3}"
+        assert saved.api_draft_latex == "edited API"
+        assert saved.api_profile_name == "Vision"
+        assert saved.api_model == "model-a"
+        assert saved.api_render_error == "draft error"
+        assert saved.active_source == "local"
+        assert service.image_records["retry"] == saved.id
+    finally:
+        service.close()
+
+
 def test_sidecar_health_and_shutdown(tmp_path: Path):
     env = os.environ.copy()
     env["FORMULAOCR_DATA_ROOT"] = str(tmp_path / "data")

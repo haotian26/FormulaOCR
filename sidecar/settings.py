@@ -9,6 +9,7 @@ from pathlib import Path
 
 DEFAULTS = {
     "auto_copy": False,
+    "default_api_ocr": False,
     "hide_dock_on_close": True,
     "hotkey": "ctrl+alt+cmd+o",
     "history_limit": 200,
@@ -35,7 +36,7 @@ def atomic_json(path: Path, value: dict) -> None:
 def validate_patch(values: dict) -> dict:
     if not isinstance(values, dict):
         raise ValueError("settings values must be an object")
-    for key in ("auto_copy", "hide_dock_on_close"):
+    for key in ("auto_copy", "hide_dock_on_close", "default_api_ocr"):
         if key in values and type(values[key]) is not bool:
             raise ValueError(f"{key} must be a boolean")
     for key, options in {

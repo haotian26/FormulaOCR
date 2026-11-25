@@ -9,11 +9,22 @@ License: MIT (third-party components retain their own licenses)
 
 ## Application
 
+Local unreleased changes after 0.4.2: in-app destructive-action confirmations
+and local Retry OCR replacing the offline badge. API controls remain separate.
+Local retry preserves the existing API branch, its draft and undo history;
+the resulting history record also retains API metadata and render status.
+Regression coverage: 49 frontend unit tests and 29 WebKit tests, including
+confirmation with browser dialogs disabled, cancellation and failed deletion.
+The local arm64 app is installed and signature-verified. Native checks confirmed
+the deletion dialog opens, Escape preserves all 18 existing records, and the
+model field fills the available row. Destructive acceptance is tested against
+synthetic records, not the user's history. These changes are not yet published.
+
 - Tauri 2 native shell, React/TypeScript interface, Python JSON Lines sidecar.
 - One bundled PP-FormulaNet_plus-L ONNX model; no runtime model download.
 - Offline recognition, native MathML preview, Word/LaTeX clipboard and local history.
 - Chinese/English interface; independent, per-page settings drafts.
-- Optional OpenAI-compatible and Mathpix profiles; API recognition is manual.
+- OpenAI-compatible and Mathpix profiles support manual recognition and opt-in API recognition for new images.
 - Existing history, settings and Keychain credentials are preserved.
 - Fit/actual-size image zoom and pan, history search and LaTeX export.
 - Manual GitHub update check under General → About; no background update traffic.

@@ -18,6 +18,7 @@ export class ImageSession {
     this.current = { id, blob, session, historyId };
   }
   setHistoryId(historyId?: string) { if (this.current) this.current.historyId = historyId; }
+  invalidate() { if (this.current) this.current.session = undefined; }
   clear() { this.current = null; }
   async ensure(): Promise<string> {
     const image = this.current;

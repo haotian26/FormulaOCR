@@ -17,8 +17,8 @@ writing: copying a formula out of a screenshot, paper, slide, or PDF. Drop in an
 image, check the result, make any corrections, then copy it as LaTeX or as an
 editable Word equation.
 
-Recognition runs locally. The optional API feature is separate and only sends
-the current image when you click **API re-recognize**.
+Recognition runs locally by default. Choose **Settings → General → Use API recognition by default**
+to send new images to your active profile. **API OCR** also works on demand.
 
 ## What it can do
 

@@ -1,6 +1,7 @@
 import {
   useCallback,
   useEffect,
+  useLayoutEffect,
   useMemo,
   useRef,
   useState,
@@ -45,6 +46,7 @@ import { useTauriEvent } from "./hooks";
 import { DraftQueue, readLayout, DEFAULT_LAYOUT } from "./state";
 import { ImageSession } from "./imageSession";
 import { ImageViewer } from "./ImageViewer";
+import { useConfirmation } from "./useConfirmation";
 import { filterHistory, exportHistoryLatex } from "./historyTools";
 
 function pngBase64ToBlob(value: string): Blob {
@@ -218,6 +220,7 @@ export function MainApp() {
   const geometryTimer = useRef<ReturnType<typeof setTimeout>>();
 
   const language = normalizeLanguage(settings.language);
+  const { confirm, confirmation } = useConfirmation(language);
   const t = useCallback(
     (text: string, values?: Record<string, string | number>) =>
       translate(language, text, values),
@@ -247,6 +250,22 @@ export function MainApp() {
   const [apiFormatted, setApiFormatted] = useState("");
   const [apiResultName, setApiResultName] = useState("");
   const [profileMenu, setProfileMenu] = useState(false);
+  const profileButton = useRef<HTMLButtonElement>(null);
+  const [profileMenuPosition, setProfileMenuPosition] = useState({ left: 0, top: 0 });
+  useLayoutEffect(() => {
+    if (!profileMenu || !profileButton.current) return;
+    const anchor = profileButton.current;
+    const position = () => {
+      const rect = anchor.getBoundingClientRect();
+      setProfileMenuPosition({ left: Math.max(8, Math.min(rect.left, window.innerWidth - 328)), top: rect.bottom + 6 });
+    };
+    position();
+    const observer = new ResizeObserver(position);
+    observer.observe(anchor);
+    if (anchor.parentElement) observer.observe(anchor.parentElement);
+    window.addEventListener("resize", position);
+    return () => { observer.disconnect(); window.removeEventListener("resize", position); };
+  }, [profileMenu, activeId, profiles, language]);
   const [mode, setMode] = useState<RecognitionMode>("chemistry");
   const [source, setSource] = useState<Source>("local");
   const [stacks, setStacks] = useState<
@@ -516,6 +535,11 @@ export function MainApp() {
         if (!id) return;
         const readyId = await imageSession.current.ensure();
         if (token !== requestId.current) return;
+        if (settings.default_api_ocr && apiEnabled && activeProfile?.enabled) {
+          setStatus(t("正在进行 API 重识别…"));
+          await runApi(readyId, token, true);
+          return;
+        }
         const result = await callSidecar<{
           formatted_latex?: string;
           raw_latex?: string;
@@ -557,7 +581,7 @@ export function MainApp() {
         if (token === requestId.current) setBusy(false);
       }
     },
-    [settings.auto_copy, mode, t],
+    [settings.auto_copy, settings.default_api_ocr, apiEnabled, activeProfile, drawer, mode, t],
   );
   useEffect(() => {
     const paste = (event: ClipboardEvent) => {
@@ -647,8 +671,42 @@ export function MainApp() {
     }
   }, [busy, recognize, t]);
   useTauriEvent("formulaocr://screenshot-requested", () => void screenshot());
+  const retryLocal = async () => {
+    if (busy || !imageId) return;
+    const token = requestId.current;
+    const revision = editRevision.current;
+    if (localLatex !== localFormatted && !(await confirm(t("重新识别会替换当前内置编辑稿，是否继续？")))) return;
+    if (token !== requestId.current || revision !== editRevision.current) return;
+    setBusy(true);
+    setStatus(t("正在重新识别…"));
+    try {
+      if (!(await flushDrafts()) || token !== requestId.current) return;
+      const readyId = await imageSession.current.ensure();
+      if (token !== requestId.current) return;
+      const result = await callSidecar<{ raw_latex?: string; formatted_latex?: string; history_id?: string; history_error?: string; elapsed_ms?: number }>("ocr.recognize", { image_id:readyId, mode });
+      if (token !== requestId.current) return;
+      if (revision !== editRevision.current) {
+        // The new OCR record is independent; keep edits made while it ran and
+        // rebind the old image/history association before the next operation.
+        imageSession.current.invalidate();
+        setStatus(result.history_error ? t("历史保存失败：{error}", { error:result.history_error }) : t("重新识别已完成，保留了识别期间的新编辑；可在历史中查看新结果。"));
+        if (drawer) void callSidecar<{ records:RecordItem[] }>("history.list").then(value => setRecords(value.records));
+        return;
+      }
+      const value = result.formatted_latex ?? result.raw_latex ?? "";
+      setLocalOriginal(result.raw_latex ?? value); setLocalFormatted(value); setLocalLatex(value);
+      setLatex(value); latexRef.current = value; setSource("local");
+      setStacks(state => ({ ...state, local:{ undo:[], redo:[] } })); resetEditGroup("local");
+      setHistoryId(result.history_id || null); imageSession.current.setHistoryId(result.history_id);
+      setStatus(result.history_error ? t("历史保存失败：{error}", { error:result.history_error }) : t("识别完成{time}", { time:result.elapsed_ms ? ` · ${Math.round(result.elapsed_ms)} ms` : "" }));
+      if (drawer) void callSidecar<{ records:RecordItem[] }>("history.list").then(value => setRecords(value.records));
+      if (settings.auto_copy && value) await copyWord(value, token, true);
+    } catch (error) {
+      if (token === requestId.current) setStatus(t("识别失败：{error}", { error:localizeError(language, error) }));
+    } finally { if (token === requestId.current) setBusy(false); }
+  };
   const apiRecognize = async () => {
-    if (!imageId || !activeId) return setStatus(t("没有当前图片或可用 API 配置"));
+    if (busy || !imageId || !activeId) return setStatus(t("没有当前图片或可用 API 配置"));
     setBusy(true);
     setStatus(t("正在进行 API 重识别…"));
     const token = requestId.current;
@@ -656,13 +714,23 @@ export function MainApp() {
       if (!(await flushDrafts()) || token !== requestId.current) return;
       const readyId = await imageSession.current.ensure();
       if (token !== requestId.current) return;
+      await runApi(readyId, token, false);
+    } catch (error) {
+      if (token === requestId.current) setStatus(t("API 识别失败：{error}", {
+        error: localizeError(language, error),
+      }));
+    } finally {
+      if (token === requestId.current) setBusy(false);
+    }
+  };
+  async function runApi(readyId: string, token: number, automatic: boolean) {
       const result = await callSidecar<{
         raw_latex: string;
         formatted_latex?: string;
         profile_name: string;
         history_id?: string;
         history_error?: string;
-      }>("api.recognize", { image_id: readyId, profile_id: activeId, mode });
+      }>("api.recognize", { image_id: readyId, profile_id: activeId, mode, automatic });
       if (token !== requestId.current) return;
       const value = result.formatted_latex || result.raw_latex;
       setStacks((state) => ({
@@ -684,14 +752,7 @@ export function MainApp() {
       if (result.history_error) setStatus(t("历史保存失败：{error}", { error: result.history_error }));
       if (drawer) void callSidecar<{ records: RecordItem[] }>("history.list").then((value) => setRecords(value.records));
       if (settings.auto_copy) await copyWord(value, token, true);
-    } catch (error) {
-      if (token === requestId.current) setStatus(t("API 识别失败：{error}", {
-        error: localizeError(language, error),
-      }));
-    } finally {
-      if (token === requestId.current) setBusy(false);
-    }
-  };
+  }
   const restore = async (id: string) => {
     const token = ++requestId.current;
     setBusy(true);
@@ -741,9 +802,10 @@ export function MainApp() {
     const revision = editRevision.current;
     if (
       (localLatex !== localFormatted || apiLatex !== apiFormatted) &&
-      !window.confirm(t("切换识别模式会重新排版当前结果，是否继续？"))
+      !(await confirm(t("切换识别模式会重新排版当前结果，是否继续？")))
     )
       return;
+    if (token !== requestId.current || revision !== editRevision.current) return;
     setBusy(true);
     try {
       if (!(await flushDrafts())) return;
@@ -925,6 +987,7 @@ export function MainApp() {
   };
   useEffect(() => {
     const onKey = (event: KeyboardEvent) => {
+      if (document.querySelector(".confirmation-dialog")) return;
       if (settingsFallback) return;
       if (event.key === "Escape") { setDrawer(false); setProfileMenu(false); return; }
       if (!(event.metaKey || event.ctrlKey)) return;
@@ -1019,6 +1082,7 @@ export function MainApp() {
             </button>
             <button
               className="profile-pill"
+              ref={profileButton}
               title={activeProfile?.name || t("当前 API 配置")}
               aria-haspopup="menu"
               aria-expanded={profileMenu}
@@ -1032,7 +1096,9 @@ export function MainApp() {
           </>
         )}
         <span className="toolbar-spacer" />
-        <span className="status-pill">{t("离线识别")}</span>
+        <button className="icon-button retry-local" disabled={busy || !imageId} onClick={() => void retryLocal()} aria-label={t("重新识别")} title={t("使用内置模型重新识别当前图片")}>
+          <RefreshCw size={18} /><span>{t("重新识别")}</span>
+        </button>
         <button
           className="icon-button"
           aria-label={t("设置")}
@@ -1043,13 +1109,13 @@ export function MainApp() {
         </button>
       </header>
       {profileMenu && <><div className="profile-menu-dismiss" onClick={() => setProfileMenu(false)} />
-        <div className="profile-menu" role="menu" aria-label={t("当前 API 配置")}>
+        <div className="profile-menu" style={profileMenuPosition} role="menu" aria-label={t("当前 API 配置")}>
           {profiles.filter((profile) => profile.enabled).map((profile) => <button key={profile.id} role="menuitemradio" aria-checked={profile.id === activeId} onClick={() => {
             setProfileMenu(false);
             void callSidecar("profiles.activate", { id: profile.id }).then(() => { setActiveId(profile.id); void emit("formulaocr://settings-updated"); })
               .catch((error) => setStatus(localizeError(language, error)));
-          }}>{profile.id === activeId && <Check size={15}/>}<span>{profile.name}</span></button>)}
-          <button role="menuitem" onClick={() => { setProfileMenu(false); showSettings("自定义模型与 API"); }}>{t("设置")}</button>
+          }} title={profile.name}><span className="profile-menu-check" aria-hidden="true">{profile.id === activeId && <Check size={15}/>}</span><span className="profile-menu-label">{profile.name}</span></button>)}
+          <button role="menuitem" onClick={() => { setProfileMenu(false); showSettings("自定义模型与 API"); }}><span className="profile-menu-check" aria-hidden="true"/><span className="profile-menu-label">{t("设置")}</span></button>
         </div></>}
       <section
         className="workspace"
@@ -1207,9 +1273,9 @@ export function MainApp() {
                   className="text-danger"
                   onClick={async () => {
                     if (
-                      !window.confirm(
+                      !(await confirm(
                         t("删除所选 {count} 条记录？", { count: selectedRecords.length }),
-                      )
+                      ))
                     )
                       return;
                     await deleteRecords(selectedRecords);
@@ -1222,7 +1288,7 @@ export function MainApp() {
                 <button
                   className="text-danger"
                   onClick={async () => {
-                    if (!window.confirm(t("删除全部识别历史？"))) return;
+                    if (!(await confirm(t("删除全部识别历史？")))) return;
                     await deleteRecords(records.map((record) => record.id), true);
                   }}
                 >
@@ -1242,7 +1308,7 @@ export function MainApp() {
             {visibleRecords.length ? (
               <div className="history-list">
                 {visibleRecords.map((record) => (
-                  <div className={historyId === record.id ? "history-item current" : "history-item"} key={record.id} onContextMenu={(event) => { event.preventDefault(); if (window.confirm(t("删除此历史记录？"))) void deleteRecord(record.id); }}>
+                  <div className={historyId === record.id ? "history-item current" : "history-item"} key={record.id} onContextMenu={async (event) => { event.preventDefault(); if (await confirm(t("删除此历史记录？"))) await deleteRecord(record.id); }}>
                     <input
                       type="checkbox"
                       checked={selectedRecords.includes(record.id)}
@@ -1343,6 +1409,7 @@ export function MainApp() {
           </div>
         </section>
       </div>}
+      {confirmation}
     </main>
   );
 }

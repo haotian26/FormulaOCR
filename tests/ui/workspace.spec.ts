@@ -120,10 +120,10 @@ test("image appears before OCR, API cannot overwrite a newer image, Undo stays w
 
 test("manual LaTeX survives mode changes and late formatting cannot overwrite an edit", async ({ page }) => {
   await boot(page);
-  page.on("dialog", dialog => dialog.accept());
   const editor = page.locator(".cm-content");
   await editor.fill("x^2");
   await page.getByRole("button", { name:"Math", exact:true }).click();
+  await page.getByRole("dialog").getByRole("button", { name:"Confirm", exact:true }).click();
   await expect(editor).toHaveText("x^2");
   await expect(page.locator(".mode-selector button.active")).toHaveText("Math");
   await page.evaluate(() => {

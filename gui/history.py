@@ -152,18 +152,33 @@ class HistoryStore:
         local_render_error: str | None,
         recognition_mode: str = "chemistry",
     ) -> HistoryRecord:
+        return self._insert_result(image_png, {
+            "local_raw_latex": local_raw_latex, "local_formatted_latex": local_formatted_latex,
+            "local_draft_latex": local_draft_latex, "local_render_error": local_render_error,
+            "active_source": "local", "recognition_mode": recognition_mode,
+        })
+
+    @synchronized
+    def create_api(self, image_png: bytes, *, api_raw_latex: str, api_formatted_latex: str,
+                   api_draft_latex: str, api_profile_name: str, api_model: str,
+                   api_render_error: str | None, recognition_mode: str) -> HistoryRecord:
+        return self._insert_result(image_png, {
+            "local_raw_latex": "", "local_draft_latex": "",
+            "api_raw_latex": api_raw_latex, "api_formatted_latex": api_formatted_latex,
+            "api_draft_latex": api_draft_latex, "api_profile_name": api_profile_name,
+            "api_model": api_model, "api_render_error": api_render_error,
+            "active_source": "api", "recognition_mode": recognition_mode,
+        })
+
+    def _insert_result(self, image_png: bytes, fields: dict) -> HistoryRecord:
         record_id = uuid.uuid4().hex
         now = time.time()
         image_path = self._write_image(record_id, image_png)
         try:
-            self._connection.execute(
-                """INSERT INTO history
-                (id, created_at, updated_at, image_path, local_raw_latex, local_formatted_latex,
-                 local_draft_latex, local_render_error, active_source, recognition_mode)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'local', ?)""",
-                (record_id, now, now, str(image_path), local_raw_latex, local_formatted_latex,
-                 local_draft_latex, local_render_error, recognition_mode),
-            )
+            row = dict(id=record_id, created_at=now, updated_at=now, image_path=str(image_path), **fields)
+            columns = ", ".join(row)
+            placeholders = ", ".join("?" for _ in row)
+            self._connection.execute(f"INSERT INTO history ({columns}) VALUES ({placeholders})", tuple(row.values()))
             self._connection.commit()
             self.prune()
         except Exception:
